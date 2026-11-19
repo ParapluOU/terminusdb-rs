@@ -68,6 +68,9 @@ analyze/
   mod.rs        Analyzer, Plan, ReqView, route classification            [C]
   document.rs   /api/document                                            [C]
   graphql.rs    normalize, inject _id/_type, extract terms               [C]
+strip.rs        take the injected _id/_type back out of the response, by
+                excising byte ranges rather than re-serializing (invariant 1);
+                StripSpec + strip()                                      [C]
   woql.rs       woql2 AST read-set extraction + write detection          [C]
 capture/
   mod.rs        CommitSource / ChangeResolver / ReadinessGate traits,
@@ -77,6 +80,8 @@ capture/
   subscription.rs  _ChangeSet SSE driver                                 [D]
   resolve.rs    ChangeResolver: /api/diff + /api/changes -> ChangeSet     [D]
 frontend/
+  value.rs      /_reactor/value: application-computed values into the graph
+  scope.rs      recording scopes: dependency sets observed as reads go past
   mod.rs        axum router + AppState                                   [D]
   proxy.rs      byte-faithful streaming passthrough                      [D]
   serve.rs      lookup/fill/compose, header protocol, fencing            [D]

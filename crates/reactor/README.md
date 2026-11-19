@@ -52,8 +52,9 @@ Everything else follows from these, and each is load-bearing:
 ## Status
 
 All five phases of [`SPEC.md`](SPEC.md) are implemented, russian-doll
-decomposition of document lists included. **565 tests pass (493 unit, 72
-integration against an embedded TerminusDB 12.1.0-rc3 server.)** Not
+decomposition of document lists included, and application-computed values on
+top. **612 tests pass (532 unit, 80 integration against an embedded TerminusDB
+12.1.0-rc3 server)**, plus 16 in [`terminusdb-cache`](../cache). Not
 production-ready — see the scope limits below — but soundness, precision *and*
 fragment-level reuse are all demonstrated.
 
@@ -65,6 +66,7 @@ fragment-level reuse are all demonstrated.
 | `analyze/*` | request → plan, for document / GraphQL / WOQL | done |
 | `compose` | russian-doll decomposition: a list is a spine over per-document fragments | done |
 | `capture/*` | `CommitSource` / `ChangeResolver` / `ReadinessGate` / `CommitHistory` + applier | done |
+| `frontend/value`, `frontend/scope` | application-computed values: observed dependencies, one snapshot per computation | done |
 | `frontend/*`, `config`, `main` | the proxy itself | done |
 | `tests/*` | fidelity, caching, dependencies, predicates, decomposition, auth, capture, spikes | done |
 
@@ -73,7 +75,23 @@ fragment-level reuse are all demonstrated.
 **`/api/document` is fully cacheable, with no cooperation from the client.** Its
 read set is derivable from the request: `id=` is one document, `type=` is a
 class's membership, `graph_type=schema` is the schema. GraphQL likewise, because
-Reactor injects `_id`/`_type` and maps the response back to documents.
+Reactor injects `_id`/`_type` and maps the response back to documents — and then
+**takes them back out of the response**, by excising their byte ranges rather
+than re-serializing anything, so a client gets the node's own answer to the
+query it actually sent (`strip.rs`, asserted byte-for-byte against the node in
+`graphql_does_not_leak_the_fields_reactor_injected`).
+
+**The client's own reads are the POST form, and they are cached.**
+`terminusdb-client` reads documents with `POST` + `X-HTTP-Method-Override: GET`,
+putting the id in a JSON body, because a lexical or hash key id cannot be
+round-tripped through a query string — so the workspace's own client, and
+therefore `terminusdb-orm`, never issues `GET /api/document` at all. Reactor
+honours the override and lifts the body's fields into the parameter list, so the
+whole document analyzer (the whitelist, the projection/framing split, the
+`ListSpec`) applies unchanged. Only a `GET` override is honoured, and only
+towards more caution: a header can turn a POST into a read, never a GET into a
+write. Without this, every typed read was classified as a write and forwarded —
+a cache that reported hits on nothing an ORM user ever asked for.
 
 **And a document list is not cached as one blob.** `GET /api/document/<ns>?type=Note`
 is cached as a *membership spine* over **one fragment per document**, so a field
@@ -208,6 +226,44 @@ path:Person,Company       schema                       everything
 string — a bare `=Ann` is rejected rather than guessed at, because guessing the
 type wrong produces a condition that silently never fires.
 
+### Values the application computes
+
+`/_reactor/value/{org}/{db}/{branch}?key=…` is the one entry point that puts
+something into the graph Reactor did not derive. An application hands over bytes
+with two facts attached — **the commit they were computed at** and **what their
+inputs depended on** — and from then on they are an ordinary cache entry.
+
+Nothing in [`FillResult`](src/engine/mod.rs) says where bytes came from, so a
+derived value goes through the same writer, the same term index, the same
+validity intervals, and the same insert protocol: a commit that lands between
+the caller's reads and its store produces a *bounded* entry rather than a stale
+one.
+
+The second fact is the interesting one, because the obvious design — ask the
+application to declare its dependencies — is what the prototype this project
+replaces did, and a wrong declaration is the one way to get stale data out of an
+otherwise sound cache. So dependencies are **observed** instead: a client labels
+its reads with a scope id (`X-Reactor-Record`), Reactor unions the read set of
+every labelled request into that scope (`frontend/scope.rs`), and the store
+names the scope rather than listing terms.
+
+A scope refuses to back a value — loudly, with a sentence — when a read
+bypassed the cache, when a read was not pinned at the scope's commit (a value
+spanning two snapshots is true at neither), when a read set could only be
+described as `everything`, or when no read was recorded at all. `GET
+/_reactor/scope/{id}` shows what a scope has seen, which is the "why will my
+derived value not cache" endpoint.
+
+One consequence worth stating: **a pinned read keeps its logical read set.** A
+commit-pinned entry stores no dependencies, since nothing can change under it —
+but a computation that read *through* it depends on what it read, so the
+analyzer reports the terms and only the storage path drops them. Reporting
+nothing there would hand back a derived value that no commit ever invalidates.
+
+The application-facing half is [`terminusdb-cache`](../cache): `derivation! { … }`
+plus `cache.get(&spec, …)`, with the scope, the pin and the key composition
+handled for you. Start with its [README](../cache/README.md).
+
 ### Russian-doll decomposition
 
 Caching a document list as one response is nearly useless: a field change to any
@@ -332,7 +388,13 @@ eviction costs a refill and nothing else. `reactor_keys_evicted` says whether
 the working set is larger than the cap.
 
 ```bash
-cargo test -p terminusdb-reactor
+# A private TMPDIR is a private embedded-binary cache, which is what makes the
+# integration suite reproducible — see "Known risks" for the collision it
+# avoids. TERMINUSDB_SOURCE selects the fork the tests need.
+mkdir -p target/reactor-tmp
+TMPDIR="$PWD/target/reactor-tmp" \
+TERMINUSDB_SOURCE=/path/to/terminusdb-fork \
+  cargo test -p terminusdb-reactor          # from the workspace root
 ```
 
 ## Horizontal scaling
@@ -410,11 +472,31 @@ written down.
   change is attributed to the **parent** (`changed=["Resident/r1"]`, with the
   subdocument itself not mentioned), so a `Doc(parent)` dependency is invalidated
   by it — exactly what the analyzer assumes.
-- **Running Reactor's tests needs an upstream.** The embedded 12.1 server would
-  not start here: `terminusdb-bin`'s `extract_binary` compares only file *size*,
-  so two differently-built binaries overwrite the same
-  `/tmp/terminusdb-bin-cache/terminusdb` and collide (`ETXTBSY`). The harness
-  therefore falls back to `REACTOR_TEST_UPSTREAM_PORT`, then to a node already on
-  `:6363`. That cache bug lives in `crates/bin` and was left alone.
+- ~~**Running Reactor's tests needs an upstream.**~~ **Resolved, by giving the
+  suite its own temp directory.** `terminusdb-bin`'s `extract_binary` compares
+  only file *size*, so two differently-built binaries overwrite the same
+  `std::env::temp_dir()/terminusdb-bin-cache/terminusdb` and collide
+  (`ETXTBSY`). That path is `TMPDIR`-relative, so a private `TMPDIR` is a
+  private binary cache and the collision cannot happen. The full 565-test suite
+  runs embedded that way (see "Running it"). The fallbacks —
+  `REACTOR_TEST_UPSTREAM_PORT`, then a node already on `:6363` — are still
+  there, and the size-compare bug in `crates/bin` is still there.
+
+### Known gaps: what is designed and not built
+
+Three of these were config knobs that parsed and did nothing. They are now
+**refused at startup** with the reason, because an operator who sets
+`shadow_sample_rate = 1.0` believes they switched on an audit.
+
+| Gap | Status | Why it matters |
+|---|---|---|
+| **Shadow verification** (§7.4) | `shadow_sample_rate` refused above `0.0` | The only thing that would turn "we believe invalidation is sound" into "we measured it in production". The shadow read must be **pinned at the commit the entry claims validity at** — that is what makes a byte difference proof of a bug rather than a race with the origin. |
+| **Eager recomputation** | `policy = "eager"` refused | Today invalidation drops an entry and the next reader pays the refill, so every write puts a latency cliff in front of the next read of a hot shape. Needs a bounded refill queue (and the queue, not the policy, is the hard part). |
+| **Eager maintenance of derived values** | not present | A derived value is dropped on invalidation and recomputed by the next reader. Pushing the recomputation at a callback registered by the application would make derivations eager (Skip's eager collections) — and `terminusdb-cache`'s struct-shaped derivations exist partly so that a key can be revived into a computation, which is what eager needs. |
+| **Child-dirtying for derived values** | not present | A nested derivation's terms are *inherited* by its parent, so an inner recomputation that produces identical bytes still rebuilds the outer value. The engine already backdates fragments, so the precision is there; the upward propagation is not. |
+| **Delta-maintained aggregates** | not present | A count is *invalidated*, never *maintained*. The writer already decides `entered`/`left` per commit, which is exactly a Skip reducer's `add`/`remove`, so a count could survive a write with no refill at all. |
+| **Push to clients** | not present | Skip's defining feature is that a client holds a live `Resource`. Reactor holds the fired-term stream already and never offers it to anyone. |
+| **GraphQL composition** | not present | Decomposition is implemented for `/api/document` list reads only. A GraphQL list pays a whole refetch when one member changes, even though its per-document dependencies are tracked precisely. |
+| **Warm-tier reclamation** | not present | `store/fscas` writes fragment bodies and never prunes. The in-memory tier evicts to budget; the disk tier grows. Deliberate — disk is cheap and an orphaned body is harmless — but it is unbounded. |
 
 The full spike list, with what to measure and why, is §4 of the design doc.

@@ -18,7 +18,7 @@
 mod common;
 
 use anyhow::Result;
-use common::models::{ledger, person, Ledger, Person};
+use common::models::{ledger, person, team, Ledger, Person, Team};
 use common::Reactor;
 use terminusdb_client::{DocumentInsertArgs, GetOpts};
 
@@ -379,6 +379,66 @@ async fn unknown_routes_are_forwarded() -> Result<()> {
                 "and the node's own answer must come back: {}",
                 probe.text()
             );
+            Ok(())
+        })
+        .await
+}
+
+/// **Invariant 1, for GraphQL.** Reactor rewrites a GraphQL query, injecting
+/// `_id`/`_type` into every object selection so the response can be mapped back
+/// to documents. The client selected neither, so a transparent proxy must take
+/// them back out — and the test for "took them out correctly" is not a key list,
+/// it is the node's own bytes.
+#[tokio::test]
+async fn graphql_does_not_leak_the_fields_reactor_injected() -> Result<()> {
+    let server = common::upstream().await?;
+    let up = &server;
+    server
+        .with_schema::<(Team, Person), _, _, _>("rx_fidelity_gql_inject", |direct, spec| async move {
+            let args = DocumentInsertArgs::from(spec.clone());
+            direct
+                .insert_instance(&person("alice", "Ann", 30)?, args.clone())
+                .await?;
+            direct
+                .insert_instance(&person("bob", "Bo", 41)?, args.clone())
+                .await?;
+            direct
+                .insert_instance(&team("red", "Red", "Person/alice")?, args)
+                .await?;
+
+            let reactor = Reactor::start(up, &spec.db).await?;
+            let path = format!("/api/graphql/admin/{}", spec.db);
+
+            for query in [
+                // A plain value-bearing selection: ids are injected at one level.
+                "query { Person { name } }",
+                // Two levels across an edge, so injection happens at both.
+                "query { Team { name lead { age } } }",
+                // The client asks for `_id` itself at the outer level, so only
+                // `_type` is ours there — the asymmetric case.
+                "query { Person { _id name } }",
+                // An alias: the response key is the alias, and `_id` is still ours.
+                "query { folk: Person { name } }",
+            ] {
+                let body = serde_json::json!({"query": query});
+                let straight = up.post(&path, body.clone()).await?;
+                assert_eq!(straight.status, 200, "direct: {}", straight.text());
+
+                // Twice: the first answer comes from the origin and the second
+                // may come from the cache. A leak in either is a leak.
+                for round in 0..2 {
+                    let through = reactor.post(&path, body.clone()).await?;
+                    assert_eq!(through.status, 200, "body: {}", through.text());
+                    assert_eq!(
+                        through.body,
+                        straight.body,
+                        "round {round} of `{query}` ({}) is not what the node answered.\nthrough: {}\n   node: {}",
+                        through.cache_status(),
+                        through.text(),
+                        straight.text()
+                    );
+                }
+            }
             Ok(())
         })
         .await

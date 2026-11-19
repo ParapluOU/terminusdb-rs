@@ -167,6 +167,19 @@ pub struct CacheConfig {
     /// from the origin's, and say so, because that is a bug and not a tuning
     /// problem.
     pub decompose: bool,
+    /// Discard a cached version this many seconds after it was filled, whatever
+    /// its dependencies say. `0` means never, which is the default and the
+    /// intended operating point.
+    ///
+    /// Term invalidation is primary and a TTL cannot make a wrong dependency
+    /// right: between a write and the commit landing in capture, a stale entry
+    /// is stale for the whole TTL just as it would be forever. What a TTL
+    /// *does* bound is the damage from a dependency we got wrong — a WOQL
+    /// `X-Reactor-Invalidate-On` condition that names too few classes, or a
+    /// term that cannot fire — which is the one hole a caller can punch in this
+    /// design. So it is a seatbelt for the opt-in surface, not a substitute for
+    /// invalidation on the surfaces Reactor proves for itself.
+    pub ttl_secs: u64,
 }
 
 impl Default for CacheConfig {
@@ -178,6 +191,7 @@ impl Default for CacheConfig {
             max_tracked_keys: 50_000,
             max_cacheable_body_mb: 8,
             decompose: true,
+            ttl_secs: 0,
         }
     }
 }
@@ -329,6 +343,11 @@ pub enum NamespacePolicy {
     #[default]
     Lazy,
     /// Recompute dirtied fragments as soon as a commit lands.
+    ///
+    /// **Not implemented**; [`Config::validate`] rejects it. The variant and its
+    /// mapping to [`Refresh::Eager`] are kept because the engine-side policy
+    /// plumbing is already in place and the only missing piece is the refill
+    /// queue — but accepting the value today would promise refills nobody does.
     Eager,
 }
 
@@ -396,6 +415,11 @@ impl Default for AnalyzeSection {
 pub struct ObservabilityConfig {
     /// Serve from cache *and* re-execute against the local node at the same
     /// pinned commit, comparing bytes. `0.0`–`1.0`.
+    ///
+    /// **Not implemented**; [`Config::validate`] rejects anything but `0.0`. The
+    /// design is §7.4 of the design doc: the shadow read must be *pinned at the
+    /// commit the entry claims validity at*, which is what turns a byte
+    /// difference into proof of a bug rather than a race with the origin.
     pub shadow_sample_rate: f64,
     /// `tracing` filter directive.
     pub log_level: String,
@@ -474,6 +498,32 @@ impl Config {
                 self.observability.shadow_sample_rate
             );
         }
+        // Both of the following are *designed* and not *built*. A knob that
+        // parses and then does nothing is the exact failure mode this engine
+        // exists to avoid — an operator who sets it believes they switched on an
+        // audit, or eager refills, and nothing tells them otherwise. So the
+        // config refuses the value instead of accepting it quietly.
+        if self.observability.shadow_sample_rate != 0.0 {
+            bail!(
+                "[observability].shadow_sample_rate is not implemented yet: nothing in the serve \
+                 path reads it, so any value above 0.0 would promise an audit that never runs. \
+                 Leave it at 0.0 — see README 'Known gaps'."
+            );
+        }
+        if let Some(ns) = self
+            .namespaces
+            .iter()
+            .find(|n| n.policy == NamespacePolicy::Eager)
+        {
+            bail!(
+                "[[namespace]] policy = \"eager\" is not implemented yet ({}/{}/{}): invalidation \
+                 drops an entry and the next reader refills it. Use \"lazy\" — see README \
+                 'Known gaps'.",
+                ns.org,
+                ns.db,
+                ns.branch
+            );
+        }
 
         // A namespace listed twice would get two writers, and the single-writer
         // invariant is the whole basis of the engine's ordering guarantees.
@@ -546,6 +596,9 @@ impl Config {
                 } else {
                     Decomposition::Whole
                 },
+                // `Policy::fresh_enough` has always honoured this; until now
+                // nothing could set it, so the mechanism was unreachable.
+                ttl: (self.cache.ttl_secs > 0).then(|| Duration::from_secs(self.cache.ttl_secs)),
                 ..Policy::default()
             }),
             max_versions_per_key: self.cache.max_versions_per_key,
@@ -829,7 +882,6 @@ mod tests {
             [[namespace]]
             org = "admin"
             db = "people"
-            policy = "eager"
             "#,
         )
         .unwrap();
@@ -839,9 +891,75 @@ mod tests {
             engine.policy.default_policy().max_body_bytes,
             2 * 1024 * 1024
         );
-        assert_eq!(engine.policy.default_policy().refresh, Refresh::Eager);
+        assert_eq!(engine.policy.default_policy().refresh, Refresh::Lazy);
         assert!(config.analyze_config().strict);
         assert_eq!(config.max_cacheable_body_bytes(), 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn a_ttl_is_off_by_default_and_reaches_the_policy_when_set() {
+        let unbounded = Config::default();
+        assert!(
+            unbounded
+                .engine_config()
+                .policy
+                .default_policy()
+                .ttl
+                .is_none(),
+            "term invalidation is primary; time is not"
+        );
+
+        let bounded = Config::from_toml("[cache]\nttl_secs = 30").unwrap();
+        assert_eq!(
+            bounded.engine_config().policy.default_policy().ttl,
+            Some(Duration::from_secs(30))
+        );
+    }
+
+    /// A knob that parses and then does nothing is worse than a missing knob:
+    /// the operator believes they turned something on. Both of these are
+    /// designed and unbuilt, so both are refused at load with the reason.
+    #[test]
+    fn unimplemented_knobs_are_refused_rather_than_ignored() {
+        let eager = Config::from_toml(
+            r#"
+            [[namespace]]
+            org = "admin"
+            db = "people"
+            policy = "eager"
+            "#,
+        )
+        .expect_err("eager recomputation does not exist yet");
+        assert!(
+            eager.to_string().contains("not implemented"),
+            "the error must say why, got: {eager}"
+        );
+        assert!(
+            eager.to_string().contains("admin/people/main"),
+            "and which namespace, got: {eager}"
+        );
+
+        let shadow = Config::from_toml("[observability]\nshadow_sample_rate = 1.0")
+            .expect_err("shadow verification does not exist yet");
+        assert!(
+            shadow.to_string().contains("not implemented"),
+            "the error must say why, got: {shadow}"
+        );
+
+        // The mapping itself still works, so the day the refill queue lands the
+        // only change is deleting the guard.
+        let mut cfg = Config::default();
+        cfg.namespaces.push(NamespaceConfig {
+            org: "admin".to_owned(),
+            db: "people".to_owned(),
+            branch: "main".to_owned(),
+            driver: None,
+            policy: NamespacePolicy::Eager,
+        });
+        assert_eq!(
+            cfg.engine_config().policy.default_policy().refresh,
+            Refresh::Eager
+        );
     }
 
     #[test]

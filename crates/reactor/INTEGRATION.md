@@ -182,7 +182,53 @@ A condition that does not parse causes a bypass rather than a cache entry, and a
 condition cannot make an unsafe query cacheable — a write stays a write, and a
 query reaching into another database via `Using` stays refused.
 
-## 5. Request headers an application can send
+## 5. Caching what your own code computes
+
+The reads above are Reactor's to analyze. The *transformation* over them is
+yours, and [`terminusdb-cache`](../cache/README.md) is how its result joins the
+same graph:
+
+```rust
+use terminusdb_cache::{derivation, Cache};
+
+derivation! {
+    /// One publication's rendered overview.
+    pub struct OverviewOf { pub id: String, pub limit: usize }
+    -> Overview
+    |this, scope| {
+        // An ordinary read through an ordinary client — but `scope.client()`,
+        // which pins it at the scope's commit and has Reactor record what it
+        // depended on.
+        let publication = scope
+            .client()
+            .get_document(&this.id, scope.spec(), GetOpts::default())
+            .await?;
+        Ok(render(&publication, this.limit))   // your code; Reactor never sees it
+    }
+}
+
+let cache = Cache::new("http://localhost:6364", "admin", "root", "admin")?;
+let page = cache.get(&spec, OverviewOf { id, limit: 20 }).await?;
+```
+
+Nothing is declared: the dependency set is the union of what those reads
+depended on, which Reactor reports as they go past. A write to the publication
+recomputes the page; a write to anything else does not.
+
+Two things to know before you lean on it. **A computation whose reads Reactor
+could not attribute is not cached** — you get your value and a reason
+(`Outcome::NotStored`, logged at `warn`, and `GET /_reactor/scope/{id}` shows
+the reads), most often because a read did not go through `scope.client()`.
+And **the key is yours**: `name/params/epoch` is composed for you, but anything
+else that changes what the computation means — the user it is scoped to above
+all — has to be a parameter, or two values share one entry.
+
+The crate's README covers the epoch policy (your build id by default, so a
+deploy cannot serve values computed by code that no longer exists), nesting for
+per-member granularity, and the one hazard it cannot detect: a closure that
+reads something outside the scope.
+
+## 6. Request headers an application can send
 
 | Header | Effect |
 |---|---|
@@ -191,11 +237,12 @@ query reaching into another database via `Using` stays refused.
 | `X-Reactor-Max-Staleness: <ms>` | Accept a cached answer only if younger than this |
 | `X-Reactor-Invalidate-On: <terms>` | State a WOQL result's dependencies |
 | `X-Reactor-Explain: 1` | Report the plan for this request |
+| `X-Reactor-Record: <scope>` | Record this read's dependencies into a scope, and report them as `X-Reactor-Deps` (set for you by `terminusdb-cache`) |
 
 Response headers: `Cache-Status`, `ETag`, `Age`, `X-Reactor-Node`,
 `X-Reactor-Head`, and `TerminusDB-Data-Version` as the origin sent it.
 
-## 6. Consistency, stated plainly
+## 7. Consistency, stated plainly
 
 > Reactor is never weaker than the TerminusDB node it fronts.
 
@@ -221,7 +268,7 @@ afterwards — would make `X-Reactor-Head` claim currency the node does not have
 and would break both read-your-writes and the `X-Reactor-Min-Version` fence.
 Watch `reactor_watermark_lag_ms`.
 
-## 7. Operating it
+## 8. Operating it
 
 | Endpoint | Purpose |
 |---|---|
@@ -271,7 +318,7 @@ refilled. That is correct behaviour (an evicted key is a miss, never a wrong
 answer) but it costs upstream requests; raise the cap if there is memory for it.
 `reactor_tracked_keys` is the current count.
 
-## 8. Rolling it out
+## 9. Rolling it out
 
 1. Start with `[analyze].strict = true`. Anything Reactor cannot prove it may
    cache is bypassed instead of cached coarsely — lower hit rate, smallest
@@ -290,6 +337,15 @@ answer) but it costs upstream requests; raise the cap if there is memory for it.
   or WOQL response is still cached whole, so a change to anything it depends on
   rebuilds all of it. For GraphQL that is deliberate: a nested selection has no
   framing to learn, and splicing one would mean re-emitting a body.
+- **Your GraphQL query is not the query Reactor executes.** Reactor adds
+  `_id`/`_type` to every object selection so the answer can be attributed to
+  documents, and removes them from the response before you see it — so the bytes
+  you get are the node's own answer to *your* query. Two things follow. A query
+  that selects `_id` itself shares a cache entry with the same query without it,
+  which is free hit rate. And if a response ever cannot be edited back
+  (`reactor_responses_unstrippable` above zero, which should never happen),
+  Reactor forwards your query to the origin uncached rather than hand you extra
+  fields.
 - **A GraphQL selection that mixes ids and field values depends on both.** Ask
   for ids and traversals alone (`{ Person { _id tickets { _id } } }`) and the
   answer depends on membership and edges only, so it survives every field edit;
@@ -334,7 +390,20 @@ answer) but it costs upstream requests; raise the cap if there is memory for it.
   on it — so such a read is invalidated by any write to the class whatever its
   filter.
 - **No eager recomputation.** Invalidation drops an entry; the next reader pays
-  to refill it.
+  to refill it. `policy = "eager"` is refused at startup rather than accepted
+  and ignored, as is `shadow_sample_rate` above `0.0` — see README "Known gaps"
+  for the full list of what is designed and not built.
+- **A value your own code computes can go in the cache**, through
+  [`terminusdb-cache`](../cache/README.md): `derivation! { … }` plus
+  `cache.get(&spec, …)`. Its dependencies are *observed* — your reads go through
+  a scope's client, Reactor reports what each read depended on, and the union
+  becomes the value's dependency set — so there is nothing to declare and
+  nothing to get wrong. What it will not do is cache a computation whose reads
+  it could not attribute; it returns your value and says why, rather than
+  caching something it cannot invalidate.
+- **Eager recomputation of derived values does not exist either.** The next
+  reader after an invalidation pays, and nested derivations inherit their
+  children's dependencies rather than being dirtied by them.
 - **The shared cache tier is unproven across nodes.** The filesystem store works
   and is unit-tested; pointing two nodes at one directory is designed for and
   untested.

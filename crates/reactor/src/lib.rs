@@ -64,6 +64,7 @@ pub mod metrics;
 pub mod predicate;
 pub mod schema_index;
 pub mod store;
+pub mod strip;
 pub mod term;
 
 #[cfg(test)]
@@ -88,6 +89,7 @@ pub use ids::{
 pub use metrics::Metrics;
 pub use schema_index::{PropKind, SchemaIndex};
 pub use store::{FragmentStore, FsCasStore, MemoryStore, TieredStore};
+pub use strip::{strip, StripSpec};
 pub use term::{Term, TermBucket, TermSet, ValueKey};
 
 /// Re-exported for convenience: Reactor uses the client's opaque commit id type

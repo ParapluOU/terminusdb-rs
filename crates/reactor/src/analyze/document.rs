@@ -8,7 +8,7 @@
 //! only safe response to an unknown parameter is to stop caching.
 
 use crate::analyze::{
-    is_read_method, Augment, CanonicalRequest, Decompose, ListSpec, Plan, ReqView,
+    is_read_request, Augment, CanonicalRequest, Decompose, ListSpec, Plan, ReqView,
 };
 use crate::ids::{DocId, Namespace};
 use crate::schema_index::SchemaIndex;
@@ -69,9 +69,10 @@ pub(super) fn plan(
     schema: &SchemaIndex,
     _cfg: &AnalyzeConfig,
 ) -> Plan {
-    let params: Vec<(String, String)> = url::form_urlencoded::parse(req.query.as_bytes())
-        .map(|(k, v)| (k.into_owned(), v.into_owned()))
-        .collect();
+    // `req.params()`, not the query string: a document read sent as a `POST`
+    // with `X-HTTP-Method-Override: GET` carries its parameters in the body, and
+    // that is the only form `terminusdb-client` ever sends.
+    let params: Vec<(String, String)> = req.params();
 
     // Writes are classified FIRST, before the parameter whitelist.
     //
@@ -87,7 +88,7 @@ pub(super) fn plan(
     // Note that TerminusDB 12.1 also accepts POST for some *reads*;
     // classifying those as writes is wasteful but sound — we forward them and
     // tell capture to look for a commit, which simply finds none.
-    if !is_read_method(req.method) {
+    if !is_read_request(req) {
         return Plan::Write;
     }
 

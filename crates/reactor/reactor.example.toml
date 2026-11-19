@@ -53,6 +53,14 @@ max_tracked_keys = 50000
 # need the whole body in memory to hash it, and that is not worth it past a
 # point. Bypassed and streaming responses are never buffered regardless.
 max_cacheable_body_mb = 8
+# Drop a cached version this many seconds after it was filled, whatever its
+# dependencies say. 0 = never, which is the default and the intended operating
+# point: term invalidation is primary, and a TTL cannot make a wrong dependency
+# right — it only bounds how long a wrong one hurts. Set it if you use the
+# opt-in WOQL conditions (X-Reactor-Invalidate-On), where naming too few classes
+# is the caller's mistake to make; leave it at 0 for the surfaces Reactor proves
+# for itself.
+ttl_secs = 0
 # Russian-doll decomposition: cache a document list as a membership spine over
 # one fragment per document, so a field change to any single member costs one
 # child refill instead of throwing the whole list away. The hot path for most
@@ -113,7 +121,9 @@ branch = "main"
 # Per-namespace override of [capture].driver, e.g. "poll" on a reader node.
 # driver = "poll"
 # "lazy"  - fill on demand (default)
-# "eager" - recompute dirtied fragments as soon as a commit lands
+# "eager" - NOT IMPLEMENTED and refused at startup: invalidation drops an entry
+#           and the next reader refills it. The engine-side policy plumbing
+#           exists; the refill queue does not.
 policy = "lazy"
 
 [analyze]
@@ -153,7 +163,9 @@ workers = 0
 [observability]
 # Serve from cache AND re-execute against the local node at the same pinned
 # commit, comparing bytes, reporting divergence with the dependency trace.
-# Sample rate 0.0-1.0. Run at 1.0 during rollout: a cache you cannot audit
-# online is a cache nobody should trust.
+# NOT IMPLEMENTED: anything other than 0.0 is refused at startup rather than
+# accepted and ignored. This is the one audit that would turn "we believe the
+# invalidation is sound" into "we measured it", so it is the top of the
+# improvement list — see README 'Known gaps'.
 shadow_sample_rate = 0.0
 log_level = "info"

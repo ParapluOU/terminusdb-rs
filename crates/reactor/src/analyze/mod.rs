@@ -93,8 +93,50 @@ impl<'a> ReqView<'a> {
 
     /// Recognized query parameters, in the order they appeared.
     fn params(&self) -> Vec<(String, String)> {
-        url::form_urlencoded::parse(self.query.as_bytes())
+        let mut params: Vec<(String, String)> = url::form_urlencoded::parse(self.query.as_bytes())
             .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        params.extend(self.overridden_body_params());
+        params
+    }
+
+    /// Parameters from the JSON body of an overridden document read.
+    ///
+    /// `terminusdb-client` sends `{"id": "...", "unfold": false, …}` as the body
+    /// of a `POST` with `X-HTTP-Method-Override: GET`, where a `GET` would have
+    /// sent the same names in the query string. Lifting them into the parameter
+    /// list means the whole document analyzer — the whitelist, the shape split,
+    /// the `ListSpec` — works on the POST form without knowing it exists.
+    ///
+    /// Only for `document`: GraphQL and WOQL bodies are queries, not parameters,
+    /// and have their own analyzers.
+    fn overridden_body_params(&self) -> Vec<(String, String)> {
+        if self.target.endpoint() != "document"
+            || is_read_method(self.method)
+            || !is_read_request(self)
+        {
+            return Vec::new();
+        }
+        let Ok(serde_json::Value::Object(fields)) =
+            serde_json::from_slice::<serde_json::Value>(self.body)
+        else {
+            // Not an object: not the form we understand. An empty parameter
+            // list leaves the request looking like a read of everything, and
+            // the analyzer's whitelist and `ListSpec` rules take it from there.
+            return Vec::new();
+        };
+        fields
+            .into_iter()
+            .map(|(name, value)| {
+                let rendered = match value {
+                    serde_json::Value::String(text) => text,
+                    // `ids` arrives as a JSON array and has to stay one: the
+                    // origin requires `?ids=["A","B"]`, and `parse_ids` reads
+                    // exactly that.
+                    other => other.to_string(),
+                };
+                (name, rendered)
+            })
             .collect()
     }
 }
@@ -621,6 +663,39 @@ fn plan_pinned(
         return Plan::bypass("endpoint is not a pinnable read");
     }
     let body_bearing_read = matches!(endpoint, "graphql" | "woql");
+    // An overridden read (`POST` + `X-HTTP-Method-Override: GET`) is a read, and
+    // this is the path that matters most for it: a derivation's reads are all
+    // commit-pinned, so without this an application-level cached value could
+    // never be built out of typed client reads.
+    if endpoint == "document" && is_read_request(req) {
+        // Reuse the whole document analyzer — the whitelist, the terms, the
+        // augmentation rules — and then make the result immutable.
+        //
+        // Two things are deliberate. The key is **commit-qualified**, because a
+        // pinned entry is immortal and sharing a key with a live read would
+        // serve a frozen answer forever. And the terms are **kept**, even
+        // though a pinned entry stores no dependencies (see `serve`): they are
+        // the logical read set, which is what a recording scope needs in order
+        // to know what an application-level value computed from this read
+        // depends on. Reporting nothing there would produce a derived value
+        // that never expires.
+        return match document::plan(req, ns, schema, cfg) {
+            Plan::Read { terms, augment, .. } => {
+                let canonical = CanonicalRequest::from_request(req, endpoint, ns);
+                Plan::Read {
+                    key: canonical.request_key(ns, Some(commit)),
+                    terms,
+                    immutable: true,
+                    rewrite: None,
+                    augment,
+                    // A pinned answer is immortal, so there is no invalidation
+                    // for a child to absorb.
+                    decompose: Decompose::No,
+                }
+            }
+            other => other,
+        };
+    }
     if !is_read_method(req.method) && !body_bearing_read {
         return Plan::bypass("write method against a pinned commit");
     }
@@ -669,6 +744,38 @@ fn plan_pinned(
 /// True for methods that cannot change server state.
 pub fn is_read_method(method: &http::Method) -> bool {
     matches!(*method, http::Method::GET | http::Method::HEAD)
+}
+
+/// The header `terminusdb-client` uses to send a read as a POST.
+pub const METHOD_OVERRIDE_HEADER: &str = "x-http-method-override";
+
+/// Whether a request is a read, including one sent as `POST` with
+/// `X-HTTP-Method-Override: GET`.
+///
+/// This matters more than it looks. `terminusdb-client` reads documents with a
+/// POST and this header, because a lexical or hash key id cannot be
+/// round-tripped through a query string — so **the workspace's own client, and
+/// therefore the ORM, never issues the `GET /api/document` form at all**.
+/// Without honouring the override, every typed read is classified as a write
+/// and forwarded, and an application using the ORM gets a cache that reports
+/// hits on nothing.
+///
+/// Only a `GET` override is honoured, and only towards *more* caution: it can
+/// turn a POST into a read, never a GET into a write. The direction matters —
+/// an attacker-supplied header must not be able to make Reactor treat a
+/// mutation as cacheable, and `PUT`/`DELETE` overrides are therefore ignored
+/// rather than obeyed.
+pub fn is_read_request(req: &ReqView) -> bool {
+    if is_read_method(req.method) {
+        return true;
+    }
+    req.method == http::Method::POST
+        && req
+            .headers
+            .get(METHOD_OVERRIDE_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.trim().eq_ignore_ascii_case("GET"))
+            .unwrap_or(false)
 }
 
 /// Query-parameter names whose *value* selects which content is returned rather
@@ -1058,10 +1165,103 @@ mod tests {
                     ..
                 } => {
                     assert!(immutable, "{endpoint} pinned read must be immutable");
-                    assert!(terms.is_empty(), "{endpoint}: nothing can invalidate it");
+                    if *endpoint == "document" {
+                        // The exception, and a deliberate one: see
+                        // `a_pinned_document_read_keeps_its_logical_read_set`.
+                        assert!(!terms.is_empty(), "document: the logical read set is kept");
+                    } else {
+                        assert!(terms.is_empty(), "{endpoint}: nothing can invalidate it");
+                    }
                     assert_eq!(key.ns, Namespace::new("admin", "mydb", "main"));
                 }
                 other => panic!("{endpoint}: expected an immutable read, got {other:?}"),
+            }
+        }
+    }
+
+    /// A pinned read stores no dependencies — nothing can change under it — but
+    /// it still *has* a read set, and a recording scope needs it: an
+    /// application-level value computed out of pinned reads depends on exactly
+    /// what those reads returned. Reporting an empty set there would produce a
+    /// derived value that no commit ever invalidates.
+    ///
+    /// The terms are dropped where they would do harm (`serve`'s fill path
+    /// stores `Vec::new()` for an immutable entry) rather than at the analyzer,
+    /// which is the only place that knows what they are.
+    #[test]
+    fn a_pinned_document_read_keeps_its_logical_read_set() {
+        let body = Bytes::new();
+        let h = headers();
+        let req = view(
+            &Method::GET,
+            "/api/document/admin/mydb/local/commit/abc123",
+            "id=Person/alice",
+            &h,
+            &body,
+        );
+        match plan(&req, &schema_fixture(), &AnalyzeConfig::default()) {
+            Plan::Read {
+                terms, immutable, ..
+            } => {
+                assert!(immutable);
+                assert_eq!(terms, vec![Term::Doc(DocId::parse("Person/alice"))]);
+            }
+            other => panic!("expected an immutable read, got {other:?}"),
+        }
+    }
+
+    /// The form `terminusdb-client` actually sends. Without this the ORM's reads
+    /// are classified as writes and the cache does nothing for an application
+    /// that uses it.
+    #[test]
+    fn a_document_read_sent_as_a_post_override_is_a_read() {
+        let body = Bytes::from(r#"{"id":"Person/alice","unfold":false}"#);
+        let mut h = headers();
+        h.insert(
+            http::HeaderName::from_static(METHOD_OVERRIDE_HEADER),
+            http::HeaderValue::from_static("GET"),
+        );
+        let req = view(&Method::POST, "/api/document/admin/mydb", "", &h, &body);
+        match plan(&req, &schema_fixture(), &AnalyzeConfig::default()) {
+            Plan::Read { terms, .. } => {
+                assert_eq!(
+                    terms,
+                    vec![Term::Doc(DocId::parse("Person/alice"))],
+                    "the id came out of the body"
+                );
+            }
+            other => panic!("expected a read, got {other:?}"),
+        }
+
+        // Without the header it is a write, and must stay one.
+        let bare = headers();
+        let plain = view(&Method::POST, "/api/document/admin/mydb", "", &bare, &body);
+        assert!(matches!(
+            plan(&plain, &schema_fixture(), &AnalyzeConfig::default()),
+            Plan::Write
+        ));
+    }
+
+    /// An override may only make Reactor *more* careful. A header that turned a
+    /// mutation into a cacheable read would be a hole anyone could reach.
+    #[test]
+    fn only_a_get_override_is_honoured() {
+        let body = Bytes::from(r#"{"id":"Person/alice"}"#);
+        for override_value in ["PUT", "DELETE", "POST", "get "] {
+            let mut h = headers();
+            h.insert(
+                http::HeaderName::from_static(METHOD_OVERRIDE_HEADER),
+                http::HeaderValue::from_str(override_value).unwrap(),
+            );
+            let req = view(&Method::POST, "/api/document/admin/mydb", "", &h, &body);
+            let plan = plan(&req, &schema_fixture(), &AnalyzeConfig::default());
+            if override_value.trim().eq_ignore_ascii_case("GET") {
+                assert!(matches!(plan, Plan::Read { .. }), "{override_value}");
+            } else {
+                assert!(
+                    matches!(plan, Plan::Write),
+                    "{override_value} must not make a write cacheable, got {plan:?}"
+                );
             }
         }
     }

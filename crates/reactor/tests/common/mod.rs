@@ -309,6 +309,26 @@ impl Upstream {
         .await
     }
 
+    /// A raw authenticated POST straight at the node, bypassing Reactor.
+    ///
+    /// The GraphQL half of the same comparison: a GraphQL read is a POST, so
+    /// "the same bytes the node would have returned" needs this one.
+    pub async fn post(&self, path_and_query: &str, body: serde_json::Value) -> Result<Probe> {
+        Probe::of(
+            reqwest::Client::new()
+                .post(format!(
+                    "http://localhost:{}{}",
+                    self.port(),
+                    path_and_query
+                ))
+                .basic_auth("admin", Some("root"))
+                .json(&body)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
     /// The node's reported version, e.g. `12.1.0-rc3` or `12.0.6`.
     pub async fn version(&self) -> Result<String> {
         let info: serde_json::Value = serde_json::from_slice(

@@ -7822,6 +7822,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "terminusdb-cache"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "blake3",
+ "bytes 1.12.1",
+ "dashmap 5.5.3",
+ "http 1.4.2",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "terminusdb-client",
+ "tokio 1.52.4",
+ "tracing",
+ "url",
+ "urlencoding 2.1.3",
+ "uuid 1.24.0",
+]
+
+[[package]]
 name = "terminusdb-cli"
 version = "0.2.0"
 dependencies = [
@@ -8111,6 +8132,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "terminusdb-bin",
+ "terminusdb-cache",
  "terminusdb-client",
  "terminusdb-format",
  "terminusdb-schema",

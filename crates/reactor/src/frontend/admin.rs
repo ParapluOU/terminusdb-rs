@@ -204,6 +204,54 @@ pub async fn explain(
     .into_response()
 }
 
+/// What `/_reactor/scope/{id}` answers.
+#[derive(Debug, Serialize)]
+pub struct ScopeReport {
+    /// The namespace the recorded reads were against.
+    pub namespace: Option<String>,
+    /// How many reads have been recorded.
+    pub reads: usize,
+    /// The union of their dependency terms, in Reactor's wire encoding.
+    pub terms: Vec<String>,
+    /// The commits the reads were pinned at.
+    pub commits: Vec<String>,
+    /// Why a value may not be stored against this scope, if that is so. Stated
+    /// against the scope's own single commit when it has one, which is the
+    /// question a developer is actually asking.
+    pub refusal: Option<String>,
+}
+
+/// `GET /_reactor/scope/{id}`
+///
+/// What a recording scope has observed so far, without consuming it. The
+/// "why will my derived value not cache" endpoint: an application developer
+/// gets a 409 from the store with one reason, and this is how they see the
+/// reads that led to it.
+pub async fn scope(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    let Some(record) = state.recorder.peek(&id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            "no such scope: it may have expired, or no labelled read has reached this node yet\n",
+        )
+            .into_response();
+    };
+    let refusal = record
+        .commits
+        .iter()
+        .next()
+        .map(|commit| terminusdb_client::CommitId::new(commit.clone()))
+        .and_then(|commit| record.refusal(&commit))
+        .or_else(|| record.refusal(&terminusdb_client::CommitId::new("")));
+    Json(ScopeReport {
+        namespace: record.ns.as_ref().map(|ns| ns.path()),
+        reads: record.reads,
+        terms: record.terms.iter().map(|term| term.to_string()).collect(),
+        commits: record.commits.iter().cloned().collect(),
+        refusal,
+    })
+    .into_response()
+}
+
 /// The request body for `/_reactor/invalidate`.
 #[derive(Debug, Deserialize)]
 pub struct InvalidateRequest {
@@ -242,9 +290,13 @@ pub async fn invalidate(
         },
     ) {
         Ok(()) => {
-            // "Empty the cache" should mean it, learned framings included.
+            // "Empty the cache" should mean it, learned framings included. Open
+            // recording scopes go too: their reads were answered from state
+            // that no longer exists, so a value stored against one would claim
+            // dependencies derived from bytes nobody can account for.
             state.framings.clear();
             state.auth.clear();
+            state.recorder.clear();
             tracing::info!(%ns, "namespace invalidated by operator request");
             (StatusCode::ACCEPTED, format!("purged {ns}\n")).into_response()
         }

@@ -78,6 +78,10 @@ clap = { version = "4", features = ["derive", "env"] }
 
 [dev-dependencies]
 terminusdb-bin = { path = "../bin" }
+# The application-level cache client, exercised end to end in tests/derived.rs.
+# It depends only on terminusdb-client, so this is not a cycle: the cache talks
+# to Reactor over HTTP, exactly as a non-Rust application would.
+terminusdb-cache = { path = "../cache" }
 terminusdb-schema-derive = { path = "../schema/derive" }
 tempfile = { workspace = true }
 pretty_assertions = { workspace = true }

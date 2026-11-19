@@ -150,6 +150,24 @@ metrics! {
         compositions_abandoned: "Compositions given up on because a child could not be \
                                  resolved even after a refill, so the whole request was \
                                  forwarded. Never a partial body.",
+        derived_hits: "Application-computed values served from the cache. These are the \
+                       transformations the application did not have to re-run.",
+        derived_misses: "Reads of an application-computed value that found nothing valid, so \
+                         the application recomputed. Includes eviction and TTL expiry, which \
+                         are indistinguishable to the caller and should be.",
+        derived_stores: "Application-computed values accepted into the dependency graph.",
+        derived_stores_raced: "Values accepted but already superseded: correct at the commit \
+                               they were computed at, and invalidated by a commit that landed \
+                               before the store. Not an error — the insert protocol gives them \
+                               a bounded validity interval — but a rising ratio to \
+                               derived_stores means computations are slower than the write \
+                               rate and the cache is doing little.",
+        responses_unstrippable: "GraphQL responses whose injected `_id`/`_type` could not be \
+                                 removed because the body did not scan as one JSON value, so \
+                                 the client's own query was forwarded to the origin instead. \
+                                 Should be zero: a rising count means the origin's response \
+                                 shape has moved and every such read is costing an extra \
+                                 upstream request.",
         predicate_evaluations: "(change, predicate) pairs evaluated to decide whether a \
                                 document entered or left a filtered set. This is the CPU \
                                 the precision costs, and it is spent on a worker pool.",

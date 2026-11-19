@@ -215,11 +215,40 @@ impl TerminusDBHttpClient {
         err
     )]
     pub async fn new_with_timeout(
+        endpoint: Url,
+        user: &str,
+        pass: &str,
+        org: &str,
+        request_timeout: Option<Duration>,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_headers(
+            endpoint,
+            user,
+            pass,
+            org,
+            request_timeout,
+            reqwest::header::HeaderMap::new(),
+        )
+        .await
+    }
+
+    /// As [`Self::new_with_timeout`], with headers sent on every request.
+    ///
+    /// Added for `terminusdb-cache`, where a derivation's reads have to be
+    /// labelled with the scope that is recording their dependencies. Labelling
+    /// them at each call site is exactly the bookkeeping that gets forgotten on
+    /// one path and then silently under-tracks the result, so the label belongs
+    /// to the client rather than to the call.
+    ///
+    /// The headers are reqwest defaults: a per-request header of the same name
+    /// overrides them.
+    pub async fn new_with_headers(
         mut endpoint: Url,
         user: &str,
         pass: &str,
         org: &str,
         request_timeout: Option<Duration>,
+        default_headers: reqwest::header::HeaderMap,
     ) -> anyhow::Result<Self> {
         let err = format!("Cannot modify segments for endpoint: {}", &endpoint);
 
@@ -237,7 +266,10 @@ impl TerminusDBHttpClient {
             user: user.to_string(),
             pass: pass.to_string(),
             endpoint: endpoint.clone(),
-            http: Client::builder().timeout(timeout).build()?,
+            http: Client::builder()
+                .timeout(timeout)
+                .default_headers(default_headers)
+                .build()?,
             org: org.to_string(),
             operation_log: OperationLog::default(),
             query_logger: Arc::new(RwLock::new(None)),

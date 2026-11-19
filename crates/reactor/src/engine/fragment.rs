@@ -5,7 +5,7 @@ use std::time::Instant;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{ContentHash, DocId, Namespace, Position, ShapeId};
+use crate::ids::{ContentHash, DerivedKey, DocId, Namespace, Position, ShapeId};
 use crate::term::Term;
 use terminusdb_client::CommitId;
 
@@ -43,6 +43,20 @@ impl FragmentKey {
             shape,
         }
     }
+
+    /// An application-computed value.
+    ///
+    /// The shape is a constant, because the [`DerivedKey`] already identifies
+    /// the whole question — there is no projection of a derived value to factor
+    /// out, the way a document has many projections. The sentinel starts with a
+    /// NUL so it cannot collide with the hash of any request shape text.
+    pub fn derived(ns: Namespace, key: DerivedKey) -> Self {
+        Self {
+            ns,
+            root: RootKey::Derived(key),
+            shape: ShapeId::of(b"\x00reactor/derived"),
+        }
+    }
 }
 
 /// What a fragment is about.
@@ -54,6 +68,15 @@ pub enum RootKey {
     Doc(DocId),
     /// A whole-response entry: hash of (method, path, canonical query/body).
     Request(ContentHash),
+    /// An application-computed value: the result of a transformation Reactor
+    /// did not run.
+    ///
+    /// Everything else about it is ordinary — it has versions, a validity
+    /// interval, dependency terms and a content hash, and it goes through the
+    /// same writer and the same insert protocol — because the engine never
+    /// cared where bytes came from, only what they depend on and which position
+    /// they were computed at.
+    Derived(DerivedKey),
 }
 
 /// Where a body lives.

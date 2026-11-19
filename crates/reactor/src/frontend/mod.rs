@@ -9,7 +9,9 @@ pub mod admin;
 pub mod auth;
 pub mod fill;
 pub mod proxy;
+pub mod scope;
 pub mod serve;
+pub mod value;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,6 +27,7 @@ use crate::engine::Engine;
 pub use auth::{AlwaysAllow, AuthDecision, AuthGate, Gate};
 pub use fill::{FillCoordinator, FillOutcome};
 pub use proxy::{Proxy, UpstreamRequest, UpstreamResponse};
+pub use scope::{Recorder, ScopeRecord};
 pub use serve::{cache_status, fence_action, CacheState, FenceAction};
 
 /// Everything a request handler needs.
@@ -49,6 +52,9 @@ pub struct AppState {
     /// fragment is already cached needs no upstream request to know how the
     /// origin wraps it. See [`crate::compose::FramingCache`].
     pub framings: Arc<crate::compose::FramingCache>,
+    /// Open recording scopes: the dependency sets of application-level
+    /// computations, observed as their reads go past. See [`scope`].
+    pub recorder: Arc<scope::Recorder>,
     /// Nudges to capture: a write's commit, or a resync after a topology call.
     pub hints: tokio::sync::mpsc::UnboundedSender<CaptureHint>,
     /// A self-reference, so a detached fill can keep the state alive.
@@ -78,6 +84,7 @@ impl AppState {
             fills,
             auth,
             framings: Arc::new(crate::compose::FramingCache::default()),
+            recorder: Arc::new(scope::Recorder::default()),
             hints,
             this: std::sync::OnceLock::new(),
         }
@@ -116,7 +123,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/_reactor/config", get(admin::config))
         .route("/_reactor/fragment/{hash}", get(admin::fragment))
         .route("/_reactor/explain", post(admin::explain))
+        .route("/_reactor/scope/{id}", get(admin::scope))
         .route("/_reactor/invalidate", post(admin::invalidate))
+        // Application-computed values: the one entry point that puts something
+        // into the graph that Reactor did not derive itself.
+        .route(
+            "/_reactor/value/{org}/{db}/{branch}",
+            get(value::get).post(value::put),
+        )
         // Everything else belongs to TerminusDB.
         .fallback(serve::handle)
         .with_state(state)

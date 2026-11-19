@@ -36,8 +36,10 @@ use crate::engine::{
 };
 use crate::frontend::fill::{FillOutcome, SharedOutcome};
 use crate::frontend::proxy::{self, UpstreamRequest};
+use crate::frontend::scope;
 use crate::frontend::AppState;
 use crate::ids::{ContentHash, DocId, Namespace, Position, Watermark};
+use crate::strip::StripSpec;
 use crate::term::Term;
 use terminusdb_client::CommitId;
 
@@ -149,6 +151,31 @@ pub fn pinned_path(target: &Target, commit: &CommitId, query: &str) -> Option<St
     })
 }
 
+/// Remove whatever Reactor injected into the query from the bytes about to be
+/// served, or say that it could not be done.
+///
+/// `None` is not "serve it anyway": the body contains fields the client never
+/// asked for, so the caller forwards the client's own request to the origin
+/// instead. That costs a request and keeps the proxy transparent, which is the
+/// right way round.
+fn deliverable(state: &AppState, strip: &StripSpec, body: Bytes) -> Option<Bytes> {
+    if strip.is_empty() {
+        return Some(body);
+    }
+    match crate::strip::strip(&body, strip) {
+        Some(stripped) => Some(stripped),
+        None => {
+            state.engine.metrics().responses_unstrippable.inc();
+            tracing::warn!(
+                bytes = body.len(),
+                "could not remove the injected ids from a response; forwarding the client's \
+                 own query instead"
+            );
+            None
+        }
+    }
+}
+
 /// Build the response for a cache hit.
 ///
 /// `Age` and `ETag` only appear on hits: `Age` is meaningless for a response we
@@ -159,6 +186,7 @@ fn hit_response(
     body: Bytes,
     watermark: &Watermark,
     request_headers: &HeaderMap,
+    strip: &StripSpec,
 ) -> Response {
     hit_response_tagged(
         state,
@@ -168,6 +196,7 @@ fn hit_response(
         watermark,
         request_headers,
         None,
+        strip,
     )
 }
 
@@ -186,8 +215,16 @@ fn hit_response_tagged(
     watermark: &Watermark,
     request_headers: &HeaderMap,
     detail: Option<&str>,
+    strip: &StripSpec,
 ) -> Response {
-    let etag = format!("\"{}\"", hash.to_hex());
+    // The `ETag` has to name the bytes the *client* got. Two clients can share
+    // one fragment and strip differently from it, so the strip is part of the
+    // identity of what was served.
+    let etag = if strip.is_empty() {
+        format!("\"{}\"", hash.to_hex())
+    } else {
+        format!("\"{}-{:016x}\"", hash.to_hex(), strip.fingerprint())
+    };
     let not_modified = request_headers
         .get(http::header::IF_NONE_MATCH)
         .and_then(|value| value.to_str().ok())
@@ -231,7 +268,7 @@ fn hit_response_tagged(
 }
 
 /// Add the headers every response carries.
-fn decorate(
+pub(crate) fn decorate(
     headers: &mut HeaderMap,
     state: &AppState,
     watermark: Option<&Watermark>,
@@ -249,6 +286,84 @@ fn decorate(
             headers.insert("x-reactor-head", value);
         }
     }
+}
+
+/// Tell the scope that labelled this read — and the client — what the answer
+/// depended on.
+///
+/// This is what makes an application-level derived value's dependencies
+/// *observed* rather than *declared*. The alternative — asking the application
+/// to name the classes its transformation touched — is what the prototype this
+/// project replaces did, and a wrong declaration is the one way to get stale
+/// data out of a cache that is otherwise sound.
+///
+/// `deps: None` means "we could not attribute this read", and it is reported as
+/// `everything` and poisons the scope. A bypass, a forwarded write and a
+/// streamed body all leave a computation with inputs Reactor did not track, so
+/// silence has to read as "do not cache" rather than as independence.
+///
+/// The response header is for clients that *can* see headers (anything not
+/// going through the ORM, and anything not written in Rust); the scope is what
+/// the ORM path relies on. Both say the same thing.
+pub(crate) fn record(
+    state: &AppState,
+    request: &UpstreamRequest,
+    response: &mut HeaderMap,
+    ns: Option<&Namespace>,
+    pinned: Option<&CommitId>,
+    deps: Option<&[Term]>,
+    untracked: &'static str,
+) {
+    let scope = request
+        .headers
+        .get(scope::SCOPE_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    let Some(scope_id) = scope else {
+        return;
+    };
+
+    match (ns, deps) {
+        (Some(ns), Some(terms)) => state.recorder.record(scope_id, ns, pinned, terms),
+        _ => state.recorder.poison(scope_id, untracked),
+    }
+
+    let value = match deps {
+        None => Term::Everything.to_string(),
+        Some([]) => "nothing".to_owned(),
+        Some(terms) => terms
+            .iter()
+            .map(|term| term.to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
+    };
+    if let Some(value) = proxy::header_value(&value) {
+        response.insert(crate::frontend::value::DEPS_HEADER, value);
+    }
+}
+
+/// The dependency set to report for a response we are about to serve.
+///
+/// The *plan's* terms, not the stored version's: a commit-pinned entry is
+/// immortal and so stores no dependencies at all, but a computation that read
+/// through it still depends on what it read. Reporting the stored set would tell
+/// a recording client that its value depends on nothing — the under-tracking
+/// hazard, and silent.
+///
+/// Where a response reveals ids, those are part of the answer's read set too.
+/// The decomposer is tried first because it understands NDJSON and `as_list`
+/// alike, where a whole-body JSON walk sees a document list as several values
+/// and gives up (reporting `Everything`, which correctly refuses to cache).
+fn record_terms(plan: &[Term], augment: Augment, body: &Bytes) -> Vec<Term> {
+    let mut terms = plan.to_vec();
+    if augment == Augment::DocIds {
+        match crate::compose::decompose(body) {
+            Ok(decomposed) => terms.extend(decomposed.ids().into_iter().map(Term::Doc)),
+            Err(_) => analyze::augment_terms_from_response(body, &mut terms),
+        }
+    }
+    terms
 }
 
 /// Turn an upstream response into a client response.
@@ -514,7 +629,19 @@ async fn forward(
     detail: Option<&str>,
 ) -> Response {
     match state.proxy.send(request).await {
-        Ok(upstream) => relay(state, upstream, None, cache_state, detail),
+        Ok(upstream) => {
+            let mut response = relay(state, upstream, None, cache_state, detail);
+            record(
+                state,
+                request,
+                response.headers_mut(),
+                None,
+                None,
+                None,
+                "the read was forwarded uncached",
+            );
+            response
+        }
         Err(err) => {
             tracing::warn!(error = %err, path = %request.path_and_query, "upstream request failed");
             bad_gateway(state, "upstream request failed")
@@ -546,6 +673,17 @@ async fn stream_through(
                 let headers = builder.headers_mut().expect("a fresh builder has headers");
                 proxy::copy_response_headers(&upstream_headers, headers);
                 decorate(headers, state, None, CacheState::Bypass, Some("stream"));
+                // A streamed body is never cached, so nothing is tracking what
+                // it depended on.
+                record(
+                    state,
+                    &request,
+                    headers,
+                    None,
+                    None,
+                    None,
+                    "the response was streamed rather than cached",
+                );
             }
             builder
                 .body(Body::from_stream(upstream.bytes_stream()))
@@ -689,6 +827,25 @@ async fn serve_read(
         _ => None,
     };
 
+    // A recording client wants the dependency set of every answer it reads, so
+    // that a value it computes from them can be stored against the union. The
+    // plan's terms are cloned only when asked for, because the common case is
+    // nobody asking.
+    let plan_terms: Option<Vec<Term>> = request
+        .headers
+        .contains_key(scope::SCOPE_HEADER)
+        .then(|| terms.clone());
+
+    // What this request's analysis added to the query, and therefore what has to
+    // come back out of the response before a client sees it. Stored bodies keep
+    // the injected ids — that is how a fragment is mapped back to documents, and
+    // why `{Person{name}}` and `{Person{name _id}}` can share one entry — so the
+    // removal is per request, on the way out, for hits and misses alike.
+    let strip = rewrite
+        .as_ref()
+        .map(|rewrite| StripSpec::new(&rewrite.injected))
+        .unwrap_or_default();
+
     if let Lookup::Hit(version) = state.engine.lookup(&key, at) {
         if let Some(body) = resolve_body(state, &version) {
             if policy.fresh_enough(version.age()) {
@@ -696,9 +853,24 @@ async fn serve_read(
                     // Every child resolved from cache: no upstream request at
                     // all, which is the point of the whole feature.
                     Composition::Ready { body, hash } => {
+                        // Recorded before stripping: the ids a GraphQL answer
+                        // reveals are part of what it depends on, and stripping
+                        // is precisely what takes them out of the bytes.
+                        let recorded = plan_terms
+                            .as_ref()
+                            .map(|plan| record_terms(plan, augment, &body));
+                        let Some(body) = deliverable(state, &strip, body) else {
+                            return forward(
+                                state,
+                                request,
+                                CacheState::Bypass,
+                                Some("unstrippable"),
+                            )
+                            .await;
+                        };
                         state.engine.metrics().lists_composed.inc();
                         state.engine.metrics().lookup_hits.inc();
-                        return hit_response_tagged(
+                        let mut response = hit_response_tagged(
                             state,
                             &version,
                             hash,
@@ -706,12 +878,52 @@ async fn serve_read(
                             &watermark,
                             &request.headers,
                             Some("composed"),
+                            &strip,
                         );
+                        record(
+                            state,
+                            request,
+                            response.headers_mut(),
+                            Some(ns),
+                            target.commit(),
+                            recorded.as_deref(),
+                            "a composed read could not be attributed",
+                        );
+                        return response;
                     }
                     // A plain, undecomposed entry. Serve the bytes.
                     Composition::Plain => {
+                        let recorded = plan_terms
+                            .as_ref()
+                            .map(|plan| record_terms(plan, augment, &body));
+                        let Some(body) = deliverable(state, &strip, body) else {
+                            return forward(
+                                state,
+                                request,
+                                CacheState::Bypass,
+                                Some("unstrippable"),
+                            )
+                            .await;
+                        };
                         state.engine.metrics().lookup_hits.inc();
-                        return hit_response(state, &version, body, &watermark, &request.headers);
+                        let mut response = hit_response(
+                            state,
+                            &version,
+                            body,
+                            &watermark,
+                            &request.headers,
+                            &strip,
+                        );
+                        record(
+                            state,
+                            request,
+                            response.headers_mut(),
+                            Some(ns),
+                            target.commit(),
+                            recorded.as_deref(),
+                            "a cached read could not be attributed",
+                        );
+                        return response;
                     }
                     // The parent is valid but some children are not: fill them
                     // all in ONE batched upstream request and splice.
@@ -753,8 +965,17 @@ async fn serve_read(
     // not of the data, so one observation of the shape is enough. Without this
     // the warming would be one-way: the list would populate the child and the
     // by-id read would still pay an upstream request to learn its own wrapper.
-    if let Some(response) = compose_single(state, ns, spec.as_ref(), at, &watermark, &key, request)
-    {
+    if let Some(response) = compose_single(
+        state,
+        ns,
+        spec.as_ref(),
+        at,
+        &watermark,
+        &key,
+        request,
+        plan_terms.as_deref(),
+        augment,
+    ) {
         return response;
     }
 
@@ -767,11 +988,21 @@ async fn serve_read(
 
     match outcome.as_ref().as_ref() {
         Ok(fill) => {
+            let recorded = plan_terms
+                .as_ref()
+                .map(|plan| record_terms(plan, augment, &fill.body));
+            let Some(body) = deliverable(state, &strip, fill.body.clone()) else {
+                return forward(state, request, CacheState::Bypass, Some("unstrippable")).await;
+            };
             let mut builder = Response::builder()
                 .status(StatusCode::from_u16(fill.status).unwrap_or(StatusCode::OK));
             {
                 let headers = builder.headers_mut().expect("a fresh builder has headers");
                 proxy::copy_response_headers(&fill.headers, headers);
+                if !strip.is_empty() {
+                    // The origin counted bytes we just removed.
+                    headers.remove(http::header::CONTENT_LENGTH);
+                }
                 decorate(
                     headers,
                     state,
@@ -779,9 +1010,22 @@ async fn serve_read(
                     CacheState::Miss,
                     fill.version.is_none().then_some("uncacheable"),
                 );
+                // A fill that could not be stored is a fill whose dependencies
+                // nobody is watching, so a value computed from it must not be
+                // cached either.
+                let recorded = fill.version.as_ref().and(recorded.as_deref());
+                record(
+                    state,
+                    request,
+                    headers,
+                    Some(ns),
+                    target.commit(),
+                    recorded,
+                    "the response could not be cached",
+                );
             }
             builder
-                .body(Body::from(fill.body.clone()))
+                .body(Body::from(body))
                 .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
         Err(err) => {
@@ -942,6 +1186,7 @@ fn composed_hash(spine_hash: ContentHash, parts: &[(Bytes, ContentHash)]) -> Con
 /// is `Doc(id)` — so a child that is a valid hit at this position is a document
 /// that existed at this position. There is nothing left for a parent fragment to
 /// contribute.
+#[allow(clippy::too_many_arguments)]
 fn compose_single(
     state: &AppState,
     ns: &Namespace,
@@ -950,6 +1195,8 @@ fn compose_single(
     watermark: &Watermark,
     parent_key: &FragmentKey,
     request: &UpstreamRequest,
+    plan_terms: Option<&[Term]>,
+    augment: Augment,
 ) -> Option<Response> {
     let spec = spec?;
     let id = spec.single()?;
@@ -977,7 +1224,8 @@ fn compose_single(
             .collect::<Vec<_>>(),
     );
     state.engine.metrics().lists_composed.inc();
-    Some(hit_response_tagged(
+    let recorded = plan_terms.map(|plan| record_terms(plan, augment, &body));
+    let mut response = hit_response_tagged(
         state,
         &child,
         composed_hash(spine_hash, &parts),
@@ -985,7 +1233,21 @@ fn compose_single(
         watermark,
         &request.headers,
         Some("composed-shared"),
-    ))
+        // Documents, not GraphQL: nothing was injected into this request.
+        &StripSpec::default(),
+    );
+    record(
+        state,
+        request,
+        response.headers_mut(),
+        Some(&parent_key.ns),
+        // This path exists only for live-branch reads: `spec` is `None` for a
+        // pinned one, and the function returns early without it.
+        None,
+        recorded.as_deref(),
+        "a shared-child read could not be attributed",
+    );
+    Some(response)
 }
 
 /// The key of the child fragment holding one document of a decomposed response.
@@ -998,7 +1260,7 @@ fn child_key(ns: &Namespace, id: &DocId, spec: &ListSpec) -> FragmentKey {
 }
 
 /// Fetch a version's bytes, wherever they live.
-fn resolve_body(state: &AppState, version: &FragmentVersion) -> Option<Bytes> {
+pub(crate) fn resolve_body(state: &AppState, version: &FragmentVersion) -> Option<Bytes> {
     match &version.body {
         BodyRef::Inline(bytes) => Some(bytes.clone()),
         // A miss here is eviction, not corruption: the fragment is simply
@@ -1387,8 +1649,10 @@ async fn execute_fill(
     if !upstream.is_success() {
         // The pinned form was rejected (or the document is absent). Answer from
         // the original request so pinning cannot break a client, and cache
-        // nothing. Whether every endpoint accepts `/local/commit/<id>` —
-        // GraphQL in particular — is unverified; phase E should test it.
+        // nothing. Every read endpoint does accept `/local/commit/<id>`, GraphQL
+        // included (`tests/spikes.rs::spike_is_graphql_pinnable_by_commit`), so
+        // in practice this branch is the absent-document case — but it stays,
+        // because a 404 must not become a cached entry either.
         tracing::debug!(
             %ns, status = %upstream.status, path = %pinned.path_and_query,
             "pinned fill was not successful; falling back to the unpinned request"

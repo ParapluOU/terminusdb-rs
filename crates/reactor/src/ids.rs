@@ -169,6 +169,40 @@ pub struct Watermark {
     pub commit: CommitId,
 }
 
+/// The key of an application-computed value.
+///
+/// Reactor did not run the transformation that produced the value and cannot see
+/// inside it, so it cannot derive a key from it the way [`ShapeId`] is derived
+/// from a request: a closure has no normal form to hash. The key is therefore
+/// the caller's, and it is load-bearing — anything that changes what the
+/// computation *means* (its parameters, the user it is scoped to, the version of
+/// the code) has to be in here, or two different values share one slot.
+///
+/// `terminusdb-cache` composes it as `name/params-hash/epoch`; Reactor treats it
+/// as opaque text and only requires that it be non-empty.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct DerivedKey(Arc<str>);
+
+impl DerivedKey {
+    /// Wrap caller-supplied key text. `None` for an empty or whitespace-only
+    /// key, which would otherwise be a cache slot nobody could name twice.
+    pub fn new(text: &str) -> Option<Self> {
+        let text = text.trim();
+        (!text.is_empty()).then(|| DerivedKey(Arc::from(text)))
+    }
+
+    /// The key text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for DerivedKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// A document id in short form, e.g. `Person/alice`.
 ///
 /// `Arc<str>` because these are cloned constantly into terms and keys. Always
