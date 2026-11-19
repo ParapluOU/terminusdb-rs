@@ -251,8 +251,35 @@ pub fn fire(cs: &ChangeSet, schema: &SchemaIndex) -> TermSet {
 
     for change in &cs.changes {
         let ancestors = schema.ancestors(&change.class);
+        let changed = change.changed_props();
 
-        out.insert(Term::Doc(change.id.clone()));
+        // A bare `Doc(id)` fire means "this document moved and we cannot say
+        // which property". For an update whose properties we *can* enumerate it
+        // is redundant, and it is not free.
+        //
+        // Redundant because every dependency a `Doc(id)` fire can dirty is also
+        // dirtied by a `DocField(id, p)` fire: `Term::Doc`, `Term::Class`,
+        // `Term::Index` and `Term::Path` all match `DocField` directly (see the
+        // truth table in `term.rs`).
+        //
+        // Not free because `Term::ClassField(c, p)` and `Term::Edge(id, p)`
+        // *must* treat a bare `Doc(id)` as "the property may have moved" —
+        // which is correct for an opaque fire and catastrophic next to a precise
+        // one. Firing both made every traversal and every id list on the class
+        // die whenever any field of any instance changed, which is exactly the
+        // over-invalidation an id-only GraphQL selection exists to avoid.
+        //
+        // Soundness rests on `changed_props()` being exhaustive, and it is:
+        // `capture::resolve` builds an update from the **whole** before and
+        // after documents (read at the parent and at the commit), and every path
+        // that cannot produce exact state sets `complete = false`, which fires
+        // `Everything` above. A create or a delete still fires `Doc(id)`: the
+        // document as a whole appeared or vanished, which is not a statement
+        // about any one property. So does an update with no derivable property
+        // set — the case the coarse rule exists for.
+        if changed.is_empty() || change.is_create() || change.is_delete() {
+            out.insert(Term::Doc(change.id.clone()));
+        }
         for class in &ancestors {
             out.insert(Term::Class(class.clone()));
         }
@@ -265,7 +292,7 @@ pub fn fire(cs: &ChangeSet, schema: &SchemaIndex) -> TermSet {
             }
         }
 
-        for prop in change.changed_props() {
+        for prop in changed {
             // NON-LOCAL INVARIANT: this fires unconditionally, before the
             // Value/Link branch below, and `Term::subsumes` depends on it.
             //
@@ -847,6 +874,67 @@ mod tests {
             prop: prop("address"),
             from_class: cls("Person")
         }));
+    }
+
+    #[test]
+    fn an_update_fires_its_properties_without_a_coarse_document_term() {
+        // The precision a traversal depends on. A fired `Doc(id)` means "we
+        // cannot say which property moved", and `ClassField`/`Edge`
+        // dependencies have to treat it as a hit — so firing it *next to* the
+        // precise terms would discard every traversal on the class whenever any
+        // field of any instance changed.
+        let schema = schema_fixture();
+        let cs = changeset(vec![DocChange::updated(
+            doc("Person/alice"),
+            cls("Person"),
+            json!({"@type": "Person", "name": "A", "favourite": "Red"}),
+            json!({"@type": "Person", "name": "B", "favourite": "Red"}),
+        )]);
+        let fired = fire(&cs, &schema);
+
+        assert!(fired.contains(&Term::DocField(doc("Person/alice"), prop("name"))));
+        assert!(fired.contains(&Term::Class(cls("Person"))));
+        assert!(
+            !fired.contains(&Term::Doc(doc("Person/alice"))),
+            "an enumerable update must not also fire the coarse term: {fired:?}"
+        );
+        assert!(
+            !fired.contains(&Term::Members(cls("Person"))),
+            "and an update is not a membership change"
+        );
+
+        // The consequence, stated as the subsumption it enables.
+        let traversal = Term::ClassField(cls("Person"), prop("employer"));
+        assert!(
+            !fired.iter().any(|f| traversal.subsumes(f, &schema)),
+            "a dependency on another property of the same class must survive"
+        );
+        let same_prop = Term::ClassField(cls("Person"), prop("name"));
+        assert!(
+            fired.iter().any(|f| same_prop.subsumes(f, &schema)),
+            "while a dependency on the property that moved must not"
+        );
+        let whole_doc = Term::Doc(doc("Person/alice"));
+        assert!(
+            fired.iter().any(|f| whole_doc.subsumes(f, &schema)),
+            "and a whole-document dependency is still dirtied, via DocField"
+        );
+    }
+
+    #[test]
+    fn an_update_we_cannot_attribute_to_a_property_still_fires_the_document() {
+        // No derivable property set: the coarse term is the only safe thing to
+        // fire, and dropping it here would be the under-invalidation this
+        // whole module exists to prevent.
+        let schema = schema_fixture();
+        let cs = changeset(vec![DocChange::updated(
+            doc("Person/alice"),
+            cls("Person"),
+            json!({"@type": "Person", "name": "A"}),
+            json!({"@type": "Person", "name": "A"}),
+        )]);
+        let fired = fire(&cs, &schema);
+        assert!(fired.contains(&Term::Doc(doc("Person/alice"))));
     }
 
     #[test]

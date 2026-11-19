@@ -113,6 +113,11 @@ metrics! {
         store_put_errors: "Content-addressed store writes that failed (body kept inline).",
         store_promotions: "Bodies promoted from the warm tier into the hot tier on read.",
         store_evictions: "Bodies evicted from the hot tier to stay within budget.",
+        keys_evicted: "Fragment keys dropped to stay within the tracked-key cap. Slot and \
+                       term-index registration are dropped together, and the body stays in \
+                       the content-addressed store. A rising count means the working set \
+                       is larger than [cache].max_tracked_keys, which costs refills: raise \
+                       the cap if there is memory for it.",
         subscription_demotions: "Namespaces whose _ChangeSet subscription was given up \
                                  because the server refused it (429 / subscription limit). \
                                  Capture continues by polling; a non-zero value means the \

@@ -185,7 +185,18 @@ pub(super) fn plan(
         // subclasses, which the type query also returns.
         (None, Some(class)) if ids.is_empty() => {
             let class = crate::ids::ClassName::new(class);
-            let mut terms = vec![Term::Members(class.clone()), Term::Class(class.clone())];
+            // `counted=true` returns `{"count":N}`, not documents. A number
+            // derived from how many instances exist cannot depend on what any
+            // of them contains, so `Class` — which fires on every field change
+            // to every instance — must not be in its read set. Paging metadata
+            // is the case that most needs to survive a write, and with `Class`
+            // it survived none. Mirrors `_count` in the GraphQL analyzer.
+            let counted = matches!(get("counted"), Some("true"));
+            let mut terms = if counted {
+                vec![Term::Members(class.clone())]
+            } else {
+                vec![Term::Members(class.clone()), Term::Class(class.clone())]
+            };
             // The parent of a decomposed list depends on membership ONLY. See
             // `ListSpec::parent_terms`: adding `Class` here would make every
             // field change refetch the list, which is the whole thing this
@@ -292,6 +303,26 @@ mod tests {
                 assert_eq!(key.root, RootKey::Doc(doc("Person/alice")));
                 assert!(!immutable);
                 assert_eq!(augment, Augment::None);
+            }
+            other => panic!("expected a read, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_counted_type_listing_depends_on_membership_alone() {
+        // `counted=true` returns `{"count":N}`. A count cannot depend on what
+        // the instances contain, so `Class` — which fires on every field change
+        // to every instance — must not be in the read set.
+        match plan_get("type=Person&counted=true") {
+            Plan::Read { terms, .. } => {
+                assert_eq!(terms, vec![Term::Members(cls("Person"))]);
+            }
+            other => panic!("expected a read, got {other:?}"),
+        }
+        // And the uncounted listing, which does return documents, keeps it.
+        match plan_get("type=Person") {
+            Plan::Read { terms, .. } => {
+                assert!(terms.contains(&Term::Class(cls("Person"))));
             }
             other => panic!("expected a read, got {other:?}"),
         }

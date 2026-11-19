@@ -457,6 +457,10 @@ impl NamespaceWriter {
             }
             slot.insert(version);
             slot.gc(self.gc_horizon(self.head), self.cfg.max_versions_per_key);
+            // A fill is a use: a key that was just filled is the most recently
+            // wanted one in the namespace, so it must not be the first thing
+            // eviction looks at.
+            slot.touch(self.state.clock.fetch_add(1, Ordering::Relaxed));
         }
 
         match to {
@@ -475,10 +479,82 @@ impl NamespaceWriter {
                 );
             }
         }
+        self.evict_over_key_cap();
         self.metrics.tracked_keys.set(self.state.slots.len() as u64);
 
         if let Some(reply) = reply {
             let _ = reply.send(shared);
+        }
+    }
+
+    /// Drop least-recently-used keys until we are back within
+    /// [`EngineConfig::max_tracked_keys`].
+    ///
+    /// Three things make this safe to do at all, and they are worth stating
+    /// because "throw away cached state" is otherwise alarming:
+    ///
+    /// * **The slot and its index registration go together, here, in the single
+    ///   writer.** Nothing else can observe one without the other, so the index
+    ///   can never hold a term pointing at a slot that no longer exists.
+    /// * **Dropping derived state is never a correctness event.** An evicted key
+    ///   is a miss, and a miss costs a fill. This is Noria's partial state.
+    /// * **The body stays in the content-addressed store.** Bodies are immutable
+    ///   and keyed by hash, so keeping one costs only disk — which the operator
+    ///   has said is not the constraint — and a refill that produces the same
+    ///   bytes finds them already present instead of writing them again.
+    ///
+    /// Scan-and-sort rather than an intrusive LRU list, for the same reason
+    /// [`crate::store::MemoryStore`] does it: the hot path is the reader's
+    /// stamp, which must stay one relaxed store, while eviction is rare and off
+    /// the critical path. Rare is enforced by hysteresis — we evict down to
+    /// below the cap in one batch, so the scan is amortized over the many fills
+    /// it takes to climb back.
+    ///
+    /// # Hook: re-adopting an evicted key from the CAS
+    ///
+    /// Because the body outlives the eviction, it is tempting to make a re-read
+    /// of an evicted key adopt those bytes instead of asking upstream. That is
+    /// **not** implemented, and it is not a small change: to serve an evicted
+    /// answer we would have to prove it is still valid at the reader's position,
+    /// which needs the key's `deps` and its `from` position — exactly the
+    /// per-key metadata the cap exists to bound. Retaining it for every evicted
+    /// key is the durable append-only metadata log of design-doc R10, which is
+    /// deferred. If it is ever built, the seam is here: keep
+    /// `FragmentKey -> (ContentHash, deps, from, changed_at)`, revalidate
+    /// through [`FiredLog::first_invalidating_after`], and count the adoptions.
+    fn evict_over_key_cap(&mut self) {
+        let cap = self.cfg.max_tracked_keys;
+        if cap == 0 || self.state.slots.len() <= cap {
+            return;
+        }
+        let target = cap.saturating_sub((cap / 10).max(1));
+        let mut candidates: Vec<(u64, FragmentKey)> = self
+            .state
+            .slots
+            .iter()
+            .map(|entry| (entry.value().last_used(), entry.key().clone()))
+            .collect();
+        candidates.sort_unstable_by_key(|(recency, _)| *recency);
+
+        let mut evicted = 0u64;
+        for (_, key) in candidates {
+            if self.state.slots.len() <= target {
+                break;
+            }
+            // Together, and in the writer: see above.
+            self.index.unregister_key(&key);
+            self.state.slots.remove(&key);
+            evicted += 1;
+        }
+        if evicted > 0 {
+            self.metrics.keys_evicted.add(evicted);
+            tracing::debug!(
+                ns = %self.state.ns,
+                evicted,
+                tracked = self.state.slots.len(),
+                cap,
+                "evicted least-recently-used fragment keys"
+            );
         }
     }
 
@@ -555,7 +631,7 @@ impl NamespaceWriter {
 mod tests {
     use super::*;
     use crate::change::DocChange;
-    use crate::engine::{Engine, Lookup};
+    use crate::engine::{Engine, Lookup, Policy, PolicySet};
     use crate::ids::{Epoch, Namespace, Seq, ShapeId};
     use crate::store::TieredStore;
     use crate::term::Term;
@@ -628,6 +704,232 @@ mod tests {
             children: vec![],
             reply: None,
         }))
+    }
+
+    // ------------------------------------------------------- key eviction
+
+    /// Every registered index entry must name a slot that still exists.
+    ///
+    /// Asserted directly rather than inferred from behaviour: a term pointing
+    /// at a dropped slot is the failure mode eviction could plausibly
+    /// introduce, and it would be invisible until a commit fired that term.
+    fn assert_index_agrees_with_slots(engine: &Engine, writer: &NamespaceWriter) {
+        for entry in writer.index().iter() {
+            assert!(
+                engine.slot_snapshot(&entry.key).is_some(),
+                "index entry {:?} points at a slot that was dropped",
+                entry.key
+            );
+        }
+    }
+
+    fn capped(max_tracked_keys: usize) -> EngineConfig {
+        EngineConfig {
+            max_tracked_keys,
+            ..EngineConfig::default()
+        }
+    }
+
+    #[test]
+    fn exceeding_the_key_cap_evicts_the_least_recently_used_keys() {
+        let (engine, mut writer) = harness_with(capped(4));
+        writer.handle(commit("c1", vec![]));
+
+        let keys: Vec<FragmentKey> = ["a", "b", "c", "d"].iter().map(|n| key(n)).collect();
+        for k in &keys {
+            writer.handle(insert(
+                k.clone(),
+                pos(0, 1),
+                vec![Term::Doc(doc("Person/alice"))],
+                "body",
+            ));
+        }
+        assert_eq!(writer.index().len(), 4, "at the cap, nothing is evicted");
+
+        // Use `a` and `b`, leaving `c` and `d` as the coldest keys.
+        assert!(engine.lookup(&keys[0], pos(0, 1)).is_hit());
+        assert!(engine.lookup(&keys[1], pos(0, 1)).is_hit());
+
+        // The fifth key takes us over the cap.
+        let e = key("e");
+        writer.handle(insert(
+            e.clone(),
+            pos(0, 1),
+            vec![Term::Doc(doc("Person/bob"))],
+            "body",
+        ));
+
+        assert_eq!(
+            engine.metrics().keys_evicted.get(),
+            2,
+            "hysteresis evicts a batch, not one key per fill"
+        );
+        for warm in [&keys[0], &keys[1], &e] {
+            assert!(
+                engine.lookup(warm, pos(0, 1)).is_hit(),
+                "a recently used key must survive: {warm:?}"
+            );
+        }
+        for cold in [&keys[2], &keys[3]] {
+            assert!(
+                matches!(engine.lookup(cold, pos(0, 1)), Lookup::Miss),
+                "the least recently used keys must be gone: {cold:?}"
+            );
+            assert!(
+                writer.index().entry_for_key(cold).is_none(),
+                "and the index must no longer report them"
+            );
+        }
+        assert_eq!(engine.metrics().tracked_keys.get(), 3);
+        assert_index_agrees_with_slots(&engine, &writer);
+    }
+
+    #[test]
+    fn an_evicted_key_refills_correctly() {
+        let (engine, mut writer) = harness_with(capped(2));
+        writer.handle(commit("c1", vec![]));
+        let a = key("a");
+        for name in ["a", "b", "c"] {
+            writer.handle(insert(
+                key(name),
+                pos(0, 1),
+                vec![Term::Doc(doc("Person/alice"))],
+                "first body",
+            ));
+        }
+        assert!(
+            matches!(engine.lookup(&a, pos(0, 1)), Lookup::Miss),
+            "precondition: `a` was the coldest key"
+        );
+
+        // Refill it, exactly as a miss would.
+        writer.handle(insert(
+            a.clone(),
+            pos(0, 1),
+            vec![Term::Doc(doc("Person/alice"))],
+            "second body",
+        ));
+        let version = engine
+            .lookup(&a, pos(0, 1))
+            .version()
+            .cloned()
+            .expect("a refilled key is served again");
+        assert!(version.is_open());
+        assert_eq!(
+            version.hash,
+            ContentHash::of(&Bytes::from_static(b"second body"))
+        );
+        assert!(
+            writer.index().entry_for_key(&a).is_some(),
+            "and it is registered again, so a commit can still invalidate it"
+        );
+
+        // It is also invalidatable: the proof that re-registration is real.
+        writer.handle(commit(
+            "c2",
+            vec![update(
+                "Person/alice",
+                "Person",
+                json!({"name": "Ann"}),
+                json!({"name": "Anne"}),
+            )],
+        ));
+        assert!(matches!(engine.lookup(&a, pos(0, 2)), Lookup::Miss));
+        assert_index_agrees_with_slots(&engine, &writer);
+    }
+
+    #[test]
+    fn eviction_keeps_the_body_in_the_content_addressed_store() {
+        // Disk is not the constraint; RAM is. A body is immutable and
+        // content-addressed, so dropping the index entry that referenced it
+        // must not drop the bytes.
+        let cfg = EngineConfig {
+            max_tracked_keys: 1,
+            policy: PolicySet::new(Policy {
+                // Force the body out of the version and into the store.
+                inline_max_bytes: 0,
+                ..Policy::default()
+            }),
+            ..EngineConfig::default()
+        };
+        let (engine, mut writer) = harness_with(cfg);
+        writer.handle(commit("c1", vec![]));
+        let a = key("a");
+        writer.handle(insert(
+            a.clone(),
+            pos(0, 1),
+            vec![Term::Doc(doc("Person/alice"))],
+            "a stored body",
+        ));
+        let hash = ContentHash::of(&Bytes::from_static(b"a stored body"));
+        assert!(engine.store().contains(&hash), "precondition: it is stored");
+
+        writer.handle(insert(
+            key("b"),
+            pos(0, 1),
+            vec![Term::Doc(doc("Person/bob"))],
+            "another body",
+        ));
+        assert!(
+            matches!(engine.lookup(&a, pos(0, 1)), Lookup::Miss),
+            "precondition: `a` was evicted"
+        );
+        assert!(
+            engine.store().contains(&hash),
+            "the bytes were never wrong, so eviction must leave them in the CAS"
+        );
+    }
+
+    #[test]
+    fn eviction_never_leaves_a_registered_term_pointing_at_a_dropped_slot() {
+        let (engine, mut writer) = harness_with(capped(3));
+        writer.handle(commit("c1", vec![]));
+        // Churn: fills, commits that invalidate some of them, and re-fills,
+        // all while the cap is being exceeded.
+        for round in 0..6u64 {
+            for name in ["a", "b", "c", "d", "e"] {
+                writer.handle(insert(
+                    key(name),
+                    pos(0, round + 1),
+                    vec![
+                        Term::Doc(doc("Person/alice")),
+                        Term::Members(cls("Company")),
+                    ],
+                    "body",
+                ));
+            }
+            writer.handle(commit(
+                &format!("c{round}"),
+                vec![update(
+                    "Person/alice",
+                    "Person",
+                    json!({"name": "Ann"}),
+                    json!({"name": format!("Ann {round}")}),
+                )],
+            ));
+            assert!(
+                writer.index().len() <= 3,
+                "the index is bounded by the key cap, not by the query log"
+            );
+            assert_index_agrees_with_slots(&engine, &writer);
+        }
+        assert!(engine.metrics().keys_evicted.get() > 0, "the cap was hit");
+    }
+
+    #[test]
+    fn a_zero_cap_means_unbounded() {
+        let (engine, mut writer) = harness_with(capped(0));
+        writer.handle(commit("c1", vec![]));
+        for i in 0..20 {
+            writer.handle(insert(
+                key(&format!("k{i}")),
+                pos(0, 1),
+                vec![Term::Doc(doc("Person/alice"))],
+                "body",
+            ));
+        }
+        assert_eq!(engine.metrics().keys_evicted.get(), 0);
+        assert_eq!(engine.metrics().tracked_keys.get(), 20);
     }
 
     // --------------------------------------------------------------- lookups

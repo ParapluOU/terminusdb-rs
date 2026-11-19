@@ -69,6 +69,15 @@ pub struct GraphQlAnalysis {
     pub injected: Vec<InjectedField>,
     /// The dependencies we could prove.
     pub terms: Vec<Term>,
+    /// True when the selection asks only for `_id`/`_type` and link
+    /// traversals, so the response contains no field value.
+    ///
+    /// Such an answer depends on membership and on where the edges point, never
+    /// on what the documents contain — which is what lets the ORM's phase-one id
+    /// list survive a field update that its phase-two bodies do not. The serve
+    /// path reads it to decide whether the response has to be walked for ids at
+    /// all; see [`crate::analyze::Augment`].
+    pub id_only: bool,
 }
 
 /// An argument value, kept in GraphQL's own value domain.
@@ -288,7 +297,18 @@ pub(super) fn plan(
         // A selection says "some Person documents", not which. The ids in the
         // response are what make the entry entity-precise, and they are the
         // whole reason `_id` is injected.
-        augment: Augment::DocIds,
+        //
+        // Except when the response is *made of* ids. Walking it would add a
+        // `Doc` term per id returned, which fires on any field change to any of
+        // them — so the ORM's phase-one id list would be discarded by an edit it
+        // does not show. The dependencies the analyzer derived (membership, the
+        // value index, and the traversed properties) already cover everything
+        // such an answer can turn on.
+        augment: if analysis.id_only {
+            Augment::None
+        } else {
+            Augment::DocIds
+        },
         // GraphQL body splicing is deliberately deferred (design doc R4): a
         // GraphQL response is a nested selection, not a sequence of documents,
         // so there is no framing to learn and composition would mean rewriting
@@ -386,18 +406,28 @@ fn analyze_graphql(
             executed: None,
             injected: Vec::new(),
             terms: Vec::new(),
+            id_only: false,
         });
     }
 
     let mut roots = convert_selection_set(selection_set, &fragments, 0)
         .ok_or("graphql query is too deeply nested to analyze")?;
 
+    // Does this selection reveal any field value? Decided before injection,
+    // because injection is only there to make a *value-bearing* response
+    // mappable to documents: an answer made of ids and edges needs no ids added
+    // to it, so an id-only query is forwarded verbatim and nothing has to be
+    // stripped on the way back.
+    let id_only = selection_is_id_only(&roots, schema);
+
     // Inject `_id`/`_type` and record where, so the response can be stripped.
     let mut injected = Vec::new();
-    let mut path = Vec::new();
     let mut any_injected = false;
-    for node in &mut roots {
-        inject(node, &mut path, &mut injected, &mut any_injected);
+    if !id_only {
+        let mut path = Vec::new();
+        for node in &mut roots {
+            inject(node, &mut path, &mut injected, &mut any_injected);
+        }
     }
 
     let shape = print_nodes(&roots, Mode::Shape);
@@ -407,7 +437,12 @@ fn analyze_graphql(
         None
     };
 
-    let terms = extract_terms(&roots, schema, cfg)?;
+    let reads = if id_only {
+        Reads::IdsOnly
+    } else {
+        Reads::Values
+    };
+    let terms = extract_terms(&roots, schema, cfg, reads)?;
 
     Ok(GraphQlAnalysis {
         kind,
@@ -415,6 +450,91 @@ fn analyze_graphql(
         executed,
         injected,
         terms,
+        id_only,
+    })
+}
+
+/// True when every root selection asks only for ids, `_type` and link
+/// traversals — no scalar field anywhere.
+///
+/// Deliberately a proof, not a guess. Anything we cannot classify — an unknown
+/// field, an inline fragment on an unknown type, a `_path_to_` traversal, a
+/// backlink, an object selection with no fields — answers `false` and the query
+/// keeps the value-bearing behaviour. Under-invalidating an id list serves
+/// *stale ids*, which is worse than any hit rate it could buy.
+fn selection_is_id_only(roots: &[Node], schema: &SchemaIndex) -> bool {
+    !roots.is_empty() && roots.iter().all(|node| root_is_id_only(node, schema, 0))
+}
+
+fn root_is_id_only(node: &Node, schema: &SchemaIndex, depth: usize) -> bool {
+    if depth > MAX_DEPTH {
+        return false;
+    }
+    match node {
+        Node::Inline { children, .. } => children
+            .iter()
+            .all(|child| root_is_id_only(child, schema, depth + 1)),
+        Node::Field {
+            name,
+            args,
+            children,
+            ..
+        } => {
+            // `_count` is a number derived from membership, not a field value,
+            // and it puts no ids in the response either way.
+            if name == "_count" {
+                return args
+                    .iter()
+                    .any(|(arg, _)| known_class(schema, &ClassName::new(arg.as_str())));
+            }
+            let class = ClassName::new(name.as_str());
+            known_class(schema, &class) && object_is_id_only(children, &class, schema, depth + 1)
+        }
+    }
+}
+
+fn object_is_id_only(
+    children: &[Node],
+    class: &ClassName,
+    schema: &SchemaIndex,
+    depth: usize,
+) -> bool {
+    if depth > MAX_DEPTH {
+        return false;
+    }
+    // An object with no selected fields is not a query the server would answer,
+    // so we have nothing to prove about it.
+    if children.is_empty() {
+        return false;
+    }
+    children.iter().all(|child| match child {
+        Node::Inline {
+            type_condition,
+            children,
+            ..
+        } => match type_condition {
+            Some(on) => {
+                let narrowed = ClassName::new(on.as_str());
+                known_class(schema, &narrowed)
+                    && object_is_id_only(children, &narrowed, schema, depth + 1)
+            }
+            None => object_is_id_only(children, class, schema, depth + 1),
+        },
+        Node::Field { name, children, .. } => {
+            if INJECTED_FIELDS.contains(&name.as_str()) {
+                return true;
+            }
+            match schema.prop(class, &PropName::new(name.as_str())) {
+                // A link: recurse, and the traversal is only id-only if what it
+                // leads to is.
+                Some(PropKind::Link { range, .. }) => {
+                    object_is_id_only(children, range, schema, depth + 1)
+                }
+                // A scalar property, a nested `_count`, a `_path_to_`, a
+                // backlink, or a field the schema does not declare.
+                _ => false,
+            }
+        }
     })
 }
 
@@ -784,15 +904,34 @@ fn print_arg_value(value: &ArgValue, mode: Mode, out: &mut String) {
 
 // --------------------------------------------------------------- extraction
 
+/// How much of a response the dependency set has to cover.
+///
+/// The two modes exist because the ORM asks two different questions of one
+/// endpoint. Phase one asks for *structure* — ids and the edges between them —
+/// and phase two batch-loads the bodies through `/api/document`. A structural
+/// answer contains no field value, so it cannot depend on one; conflating the
+/// two layers is what made an id list die on every field edit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reads {
+    /// Field values appear in the response. Collections depend on their
+    /// members' contents, and the response has to be walked for ids.
+    Values,
+    /// Only `_id`/`_type` and link traversals appear. The answer depends on
+    /// membership and on which documents the edges point at, never on what
+    /// those documents contain.
+    IdsOnly,
+}
+
 /// Walk the selection tree and derive the dependency set.
 fn extract_terms(
     roots: &[Node],
     schema: &SchemaIndex,
     cfg: &AnalyzeConfig,
+    reads: Reads,
 ) -> Result<Vec<Term>, &'static str> {
     let mut terms = Vec::new();
     for node in roots {
-        extract_root(node, schema, cfg, &mut terms)?;
+        extract_root(node, schema, cfg, reads, &mut terms)?;
     }
     terms.sort();
     terms.dedup();
@@ -803,12 +942,13 @@ fn extract_root(
     node: &Node,
     schema: &SchemaIndex,
     cfg: &AnalyzeConfig,
+    reads: Reads,
     out: &mut Vec<Term>,
 ) -> Result<(), &'static str> {
     match node {
         Node::Inline { children, .. } => {
             for child in children {
-                extract_root(child, schema, cfg, out)?;
+                extract_root(child, schema, cfg, reads, out)?;
             }
             Ok(())
         }
@@ -827,7 +967,7 @@ fn extract_root(
                 for (arg, value) in args {
                     let class = ClassName::new(arg.as_str());
                     if known_class(schema, &class) {
-                        collection_terms(&class, Some(value), schema, out);
+                        count_terms(&class, Some(value), out);
                         matched = true;
                     }
                 }
@@ -844,48 +984,127 @@ fn extract_root(
 
             // `id: "Person/alice"` is the precise case: one document.
             match single_id_arg(args) {
-                Some(id) => out.push(Term::Doc(id)),
+                Some(id) => match reads {
+                    Reads::Values => out.push(Term::Doc(id)),
+                    // Only the id came back, so what the answer turns on is
+                    // whether that document still exists.
+                    Reads::IdsOnly => out.push(existence_term(id)),
+                },
                 None => {
                     let filter = args
                         .iter()
                         .find(|(name, _)| name == "filter")
                         .map(|(_, value)| value);
-                    collection_terms(&class, filter, schema, out);
+                    match reads {
+                        Reads::Values => collection_terms(&class, filter, out),
+                        Reads::IdsOnly => membership_terms(&class, filter, out),
+                    }
                 }
             }
-            extract_object(children, &class, schema, cfg, out, 0)
+            extract_object(children, &class, schema, cfg, reads, out, 0)
         }
     }
 }
 
-/// The dependency of "a collection of `class`, optionally filtered".
-fn collection_terms(
-    class: &ClassName,
-    filter: Option<&ArgValue>,
-    schema: &SchemaIndex,
-    out: &mut Vec<Term>,
-) {
-    match filter.and_then(|f| equality_filter(f)) {
-        // `filter: {p: {eq: v}}` is exactly a value index.
-        Some((prop, value)) => out.push(Term::Index {
+/// The dependency of "a collection of `class`, optionally filtered", **whose
+/// members' field values are in the response**.
+///
+/// Compare [`membership_terms`] and [`count_terms`], which are for answers that
+/// do *not* contain field values. The distinction is the whole point and it is
+/// easy to erase by accident: a listing that returns documents genuinely
+/// depends on their contents, so [`Term::Class`] belongs here and nowhere else.
+/// Removing it from a value-bearing collection would serve stale bodies; adding
+/// it to a count or an id list makes both die on every unrelated field edit,
+/// which is the bug this split fixes. Do not "simplify" the three into one.
+fn collection_terms(class: &ClassName, filter: Option<&ArgValue>, out: &mut Vec<Term>) {
+    match filter_shape(filter) {
+        // `filter: {p: {eq: v}}` is exactly a value index. The members' own
+        // field values are covered by the response augmentation, which adds a
+        // `Doc` term per id actually returned.
+        FilterShape::Equality(prop, value) => out.push(Term::Index {
             class: class.clone(),
             prop,
             value,
         }),
-        None => {
-            if filter.is_some() {
-                // Some other filter shape (ranges, `and`, substring, …). We
-                // cannot name the bucket, but every member of the result is an
-                // instance of the class, so the class is a sound dependency.
-                out.push(Term::Class(class.clone()));
-                out.push(Term::Members(class.clone()));
-            } else {
-                out.push(Term::Members(class.clone()));
-                out.push(Term::Class(class.clone()));
-            }
+        // Some other filter shape (ranges, `and`, substring, …). We cannot name
+        // the bucket, but every member of the result is an instance of the
+        // class, so the class is a sound dependency.
+        FilterShape::Opaque | FilterShape::Unfiltered => {
+            out.push(Term::Members(class.clone()));
+            out.push(Term::Class(class.clone()));
         }
     }
-    let _ = schema;
+}
+
+/// The dependency of "*which* `class` documents match this filter", for an
+/// answer that reveals nothing about their contents: an id list or a count.
+///
+/// The unfiltered case is the one that matters. A total count is a statement
+/// about how many instances exist, so only a create or a delete can change it —
+/// which is exactly [`Term::Members`]. Adding [`Term::Class`] there (as the
+/// collection form must) would discard the entry on every field change to any
+/// instance, so paging metadata would thrash on every write, which is precisely
+/// the moment it most needs to survive.
+fn membership_terms(class: &ClassName, filter: Option<&ArgValue>, out: &mut Vec<Term>) {
+    match filter_shape(filter) {
+        // Membership of the bucket, and nothing else. A document moving in or
+        // out fires this on both the old and the new value, so a count cannot
+        // miss a crossing.
+        FilterShape::Equality(prop, value) => out.push(Term::Index {
+            class: class.clone(),
+            prop,
+            value,
+        }),
+        FilterShape::Unfiltered => out.push(Term::Members(class.clone())),
+        // We cannot name the bucket, so we cannot say which field values move a
+        // document into or out of it. Stay conservative.
+        FilterShape::Opaque => {
+            out.push(Term::Members(class.clone()));
+            out.push(Term::Class(class.clone()));
+        }
+    }
+}
+
+/// The dependency of a `_count`. See [`membership_terms`] — a count is the
+/// purest membership question there is.
+fn count_terms(class: &ClassName, filter: Option<&ArgValue>, out: &mut Vec<Term>) {
+    membership_terms(class, filter, out)
+}
+
+/// "Does this document still exist", for an answer that carries its id and
+/// nothing else. An id with no class prefix has no membership we could name, so
+/// it falls back to the coarser whole-document term.
+fn existence_term(id: DocId) -> Term {
+    match id.class() {
+        Some(class) => Term::Members(class),
+        None => Term::Doc(id),
+    }
+}
+
+/// What a filter argument lets us say about the set it selects.
+enum FilterShape {
+    /// Absent, or `{}`: the whole class. An empty filter object is what the
+    /// `_count(Person: {})` form sends, so treating it as "some filter we do
+    /// not understand" would make every unfiltered count conservative.
+    Unfiltered,
+    /// `{prop: {eq: value}}`: one nameable value-index bucket.
+    Equality(PropName, ValueKey),
+    /// Anything else: we cannot name the bucket.
+    Opaque,
+}
+
+fn filter_shape(filter: Option<&ArgValue>) -> FilterShape {
+    let filter = match filter {
+        Some(filter) => filter,
+        None => return FilterShape::Unfiltered,
+    };
+    if matches!(filter, ArgValue::Object(fields) if fields.is_empty()) {
+        return FilterShape::Unfiltered;
+    }
+    match equality_filter(filter) {
+        Some((prop, value)) => FilterShape::Equality(prop, value),
+        None => FilterShape::Opaque,
+    }
 }
 
 /// Recognize `{prop: {eq: scalar}}` and nothing else.
@@ -925,11 +1144,13 @@ fn single_id_arg(args: &[(String, ArgValue)]) -> Option<DocId> {
 }
 
 /// Walk the fields selected on an object of class `class`.
+#[allow(clippy::too_many_arguments)]
 fn extract_object(
     children: &[Node],
     class: &ClassName,
     schema: &SchemaIndex,
     cfg: &AnalyzeConfig,
+    reads: Reads,
     out: &mut Vec<Term>,
     depth: usize,
 ) -> Result<(), &'static str> {
@@ -949,7 +1170,7 @@ fn extract_object(
                     .map(|on| ClassName::new(on.as_str()))
                     .filter(|c| known_class(schema, c))
                     .unwrap_or_else(|| class.clone());
-                extract_object(children, &narrowed, schema, cfg, out, depth + 1)?;
+                extract_object(children, &narrowed, schema, cfg, reads, out, depth + 1)?;
             }
             Node::Field {
                 name,
@@ -963,8 +1184,14 @@ fn extract_object(
                     continue;
                 }
                 if name == "_count" {
-                    out.push(Term::Members(class.clone()));
-                    out.push(Term::Class(class.clone()));
+                    // A nested count is still a count: membership only. See
+                    // `count_terms` — the class term that used to be here made
+                    // every field edit to any instance discard it.
+                    let filter = args
+                        .iter()
+                        .find(|(name, _)| name == "filter")
+                        .map(|(_, value)| value);
+                    count_terms(class, filter, out);
                     continue;
                 }
                 // `_path_to_C(path: "film,<film")`: a traversal. We cannot prove
@@ -980,7 +1207,7 @@ fn extract_object(
                         from: None,
                         classes: schema.descendants(&target),
                     });
-                    extract_object(children, &target, schema, cfg, out, depth + 1)?;
+                    extract_object(children, &target, schema, cfg, reads, out, depth + 1)?;
                     continue;
                 }
                 // `_employer_of_Person`: the reverse edge.
@@ -1005,24 +1232,40 @@ fn extract_object(
                     // need the parent ids, which only the response has; the
                     // augmented `Doc` terms cover the pointing documents, and
                     // `ClassField` covers the property on the pointing class.
-                    extract_object(children, &from_class, schema, cfg, out, depth + 1)?;
+                    extract_object(children, &from_class, schema, cfg, reads, out, depth + 1)?;
                     continue;
                 }
 
                 let prop = PropName::new(name.as_str());
                 match schema.prop(class, &prop) {
                     Some(PropKind::Link { range, .. }) => {
+                        // The traversal itself: where this property's edges
+                        // point. `ClassField` rather than a response-derived
+                        // `Edge(parent_id, prop)` because an id-only selection
+                        // need not select `_id` at every level, so a walk of the
+                        // response cannot always name the parent — and a
+                        // traversal term we failed to emit serves stale ids.
                         out.push(Term::ClassField(class.clone(), prop));
                         let range = range.clone();
+                        if reads == Reads::IdsOnly {
+                            // The nested ids are this edge's targets, so a
+                            // target that is deleted (or created with a new
+                            // identity) changes the answer without the parent's
+                            // property moving.
+                            out.push(Term::Members(range.clone()));
+                        }
                         // A nested link may carry its own filter.
                         if let Some(filter) = args
                             .iter()
                             .find(|(name, _)| name == "filter")
                             .map(|(_, v)| v)
                         {
-                            collection_terms(&range, Some(filter), schema, out);
+                            match reads {
+                                Reads::Values => collection_terms(&range, Some(filter), out),
+                                Reads::IdsOnly => membership_terms(&range, Some(filter), out),
+                            }
                         }
-                        extract_object(children, &range, schema, cfg, out, depth + 1)?;
+                        extract_object(children, &range, schema, cfg, reads, out, depth + 1)?;
                     }
                     Some(PropKind::Value { .. }) => {
                         out.push(Term::ClassField(class.clone(), prop));
@@ -1437,20 +1680,152 @@ mod tests {
     }
 
     #[test]
-    fn a_count_root_field_depends_on_the_classes_membership() {
-        let terms = terms("query { _count(Person: {}) }");
-        assert!(terms.contains(&Term::Members(cls("Person"))));
-        assert!(terms.contains(&Term::Class(cls("Person"))));
+    fn an_unfiltered_count_depends_on_membership_and_nothing_else() {
+        // The regression this test exists for: a total count is a statement
+        // about how many instances exist, so a field edit to one of them must
+        // not discard it. `Class(Person)` here made paging metadata die on
+        // every write.
+        assert_eq!(
+            terms("query { _count(Person: {}) }"),
+            vec![Term::Members(cls("Person"))]
+        );
     }
 
     #[test]
-    fn a_filtered_count_is_a_value_index() {
+    fn a_filtered_count_is_a_value_index_alone() {
         let terms = terms(r#"query { _count(Person: {name: {eq: "Ann"}}) }"#);
-        assert!(terms.contains(&Term::Index {
-            class: cls("Person"),
-            prop: prop("name"),
-            value: ValueKey::of(&json!("Ann"))
-        }));
+        assert_eq!(
+            terms,
+            vec![Term::Index {
+                class: cls("Person"),
+                prop: prop("name"),
+                value: ValueKey::of(&json!("Ann"))
+            }],
+            "a document moving in or out of the bucket fires the index on both \
+             the old and the new value, so nothing coarser is needed"
+        );
+    }
+
+    #[test]
+    fn a_count_whose_bucket_we_cannot_name_stays_conservative() {
+        // A filter shape we do not model: we cannot say which field values move
+        // a document in or out, so the class dependency has to stay.
+        let terms = terms(r#"query { _count(Person: {name: {regex: "A.*"}}) }"#);
+        assert!(terms.contains(&Term::Members(cls("Person"))));
+        assert!(terms.contains(&Term::Class(cls("Person"))), "got {terms:?}");
+    }
+
+    #[test]
+    fn a_nested_count_depends_on_membership_and_nothing_else() {
+        // Rooted at one document so the root contributes no class term, which
+        // leaves the nested `_count`'s own dependencies observable.
+        let terms = terms(r#"query { Person(id: "Person/alice") { friends { _count } } }"#);
+        assert!(terms.contains(&Term::Members(cls("Person"))));
+        assert!(
+            !terms.contains(&Term::Class(cls("Person"))),
+            "a nested count must not depend on every instance's fields: {terms:?}"
+        );
+    }
+
+    #[test]
+    fn a_collection_that_returns_documents_still_depends_on_field_values() {
+        // The other half of the count fix: a listing whose *bodies* are in the
+        // response genuinely depends on their contents.
+        let terms = terms("query { Person { name } }");
+        assert!(terms.contains(&Term::Members(cls("Person"))));
+        assert!(terms.contains(&Term::Class(cls("Person"))), "got {terms:?}");
+    }
+
+    // ------------------------------------------------------------- id-only
+
+    #[test]
+    fn an_id_only_selection_does_not_depend_on_field_values() {
+        let a = analysis("query { Person { _id friends { _id } } }");
+        assert!(a.id_only);
+        assert!(
+            !a.terms.contains(&Term::Class(cls("Person"))),
+            "an answer made of ids cannot turn on a field value: {:?}",
+            a.terms
+        );
+        assert!(a.terms.contains(&Term::Members(cls("Person"))));
+        assert!(
+            a.terms
+                .contains(&Term::ClassField(cls("Person"), prop("friends"))),
+            "the traversal is still a dependency: {:?}",
+            a.terms
+        );
+        assert!(
+            a.executed.is_none(),
+            "an id-only query needs no injection, so it is forwarded verbatim"
+        );
+        assert!(a.injected.is_empty());
+    }
+
+    #[test]
+    fn an_id_only_selection_still_dies_on_a_deleted_edge_target() {
+        // The nested ids are the edge's targets, so a target that is deleted (or
+        // recreated with a new identity) changes the answer even though the
+        // parent's property did not move.
+        let terms = terms("query { Person { _id address { _id } } }");
+        assert!(
+            terms.contains(&Term::Members(cls("Address"))),
+            "got {terms:?}"
+        );
+    }
+
+    #[test]
+    fn one_scalar_field_anywhere_restores_value_dependence() {
+        for query in [
+            "query { Person { _id name } }",
+            "query { Person { _id friends { _id name } } }",
+            "query { Person { _id nonexistent } }",
+            "query { Person { _id _path_to_Company(path: \"employer\") { _id } } }",
+        ] {
+            let a = analyze_graphql(query, None, &schema_fixture(), &AnalyzeConfig::default())
+                .expect("analyzable");
+            assert!(
+                !a.id_only,
+                "{query} must not be treated as id-only ({:?})",
+                a.terms
+            );
+        }
+    }
+
+    #[test]
+    fn an_id_only_filtered_selection_is_a_value_index() {
+        let a = analysis(r#"query { Person(filter: {name: {eq: "Ann"}}) { _id } }"#);
+        assert!(a.id_only);
+        assert_eq!(
+            a.terms,
+            vec![Term::Index {
+                class: cls("Person"),
+                prop: prop("name"),
+                value: ValueKey::of(&json!("Ann"))
+            }]
+        );
+    }
+
+    #[test]
+    fn an_id_only_by_id_selection_is_an_existence_question() {
+        let a = analysis(r#"query { Person(id: "Person/alice") { _id } }"#);
+        assert!(a.id_only);
+        assert_eq!(a.terms, vec![Term::Members(cls("Person"))]);
+    }
+
+    #[test]
+    fn an_id_only_selection_skips_the_response_augmentation() {
+        match plan_body(json!({"query": "query { Person { _id friends { _id } } }"})) {
+            Plan::Read { augment, terms, .. } => {
+                assert_eq!(
+                    augment,
+                    Augment::None,
+                    "walking the response would add a Doc term per id, which is \
+                     exactly the field dependence we just removed"
+                );
+                assert!(terms.contains(&Term::Members(cls("Person"))));
+            }
+            other => panic!("expected a read, got {other:?}"),
+        }
     }
 
     #[test]

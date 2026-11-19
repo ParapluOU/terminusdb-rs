@@ -332,7 +332,17 @@ pub fn fire(cs: &ChangeSet, schema: &SchemaIndex) -> TermSet;
 - `!cs.complete` → `{Everything}`, return immediately.
 - `cs.schema_changed` → insert `Schema`.
 - per `DocChange`:
-  - `Doc(id)`, and `Class(c)` for every `c` in `schema.ancestors(class)`.
+  - `Class(c)` for every `c` in `schema.ancestors(class)`.
+  - `Doc(id)` **only** for a create, a delete, or an update whose
+    `changed_props()` is empty. A bare `Doc(id)` means "this document moved and
+    we cannot say which property", which `ClassField`/`Edge` dependencies are
+    obliged to treat as a hit — so firing it *beside* the precise `DocField`
+    terms discards every traversal and every id list on the class whenever any
+    field of any instance changes. It is redundant there in any case: `Doc`,
+    `Class`, `Index` and `Path` dependencies all match a fired `DocField`
+    directly. Sound because `capture::resolve` builds an update from the whole
+    before and after documents, and every path that cannot sets
+    `complete = false` (which fires `Everything`).
   - create or delete → `Members(c)` for every ancestor `c`.
   - for each `p` in `changed_props()`:
     - `DocField(id, p)` and `ClassField(c, p)` for every ancestor `c` that
@@ -400,9 +410,36 @@ impl FragmentVersion { pub fn covers(&self, at: Position) -> bool; }
 
 /// Newest-first version list for one key. Keep it short: GC versions no live
 /// reader needs (below the minimum latched position).
-#[derive(Clone, Debug, Default)]
-pub struct FragmentSlot { pub versions: Vec<FragmentVersion> }
+#[derive(Debug, Default)]
+pub struct FragmentSlot {
+    pub versions: Vec<FragmentVersion>,
+    /// Logical time of the last lookup, written by *readers* through a shared
+    /// reference (one relaxed store on the hot path).
+    last_used: AtomicU64,
+}
 ```
+
+**The bounded key index.** `EngineConfig::max_tracked_keys` caps how many
+fragment keys a namespace tracks, and over the cap the writer drops the
+least-recently-used ones. Three properties make that safe, and all three are
+load-bearing:
+
+- The slot and its term-index registration are dropped **together, in the
+  writer**, so nothing can observe one without the other and the index can never
+  hold a term pointing at a slot that no longer exists.
+- Dropping derived state is never a correctness event: an evicted key is a miss,
+  and a miss costs a fill. Noria's partial state.
+- The **body stays in the content-addressed store**. Bodies are immutable and
+  keyed by hash, so keeping one costs only disk, and a refill that produces the
+  same bytes finds them already there.
+
+Eviction scans and sorts by recency rather than maintaining an intrusive LRU
+list, for the same reason `store::MemoryStore` does: the hot path is the
+reader's stamp, and eviction is rare (one batch per overflow, down to below the
+cap). Re-adopting an evicted key *from the CAS without an upstream request* is
+**not** implemented: it would need the key's dependency list and validity
+interval to survive eviction, i.e. the durable per-key metadata log of R10,
+which is deferred.
 
 ```rust
 // engine/mod.rs
@@ -598,7 +635,9 @@ Rules:
 - `Target::Pinned` + a read method/endpoint → `Read { immutable: true, terms: [] }`.
   Highest-value, zero-risk case: do it first.
 - `/api/document` GET: `id=` → `Doc`; `type=` → `Members(C)` + `Class(C)`;
-  `graph_type=schema` → `Schema`. Every `GetOpts`-ish query param
+  `type=` with `counted=true` → `Members(C)` **only** (the body is a count, not
+  documents, so it cannot depend on any field value); `graph_type=schema` →
+  `Schema`. Every `GetOpts`-ish query param
   (`unfold`, `as_list`, `compress_ids`, `minimized`, `type`, `skip`, `count`,
   `id`, `ids`, `prefixed`, `xsd`, `format`, `identifiers`, `id_prefix`,
   `raw_id`) belongs in the shape hash. Unrecognized params → `Bypass`.
@@ -626,19 +665,50 @@ GraphQL handling, in order:
    to the client. Keep them in the stored fragment.
 4. **Extract terms** against `SchemaIndex`:
    - root field `C(filter: {p: {eq: v}})` → `Index{C,p,v}`; any other filter
-     shape → `Class(C)`; no filter → `Members(C)` + `Class(C)`.
+     shape → `Class(C)` + `Members(C)`; no filter → `Members(C)` + `Class(C)`.
+     `Class(C)` is there because the members' **field values are in the
+     response**; it must not appear in the read set of an answer that carries no
+     field value (see `_count` and the id-only rule below).
    - nested link field `p` on class `C` → `ClassField(C,p)` and, per returned
      parent id, `Edge(id,p)` (added post-hoc from the response ids — see below).
    - backlink field `_p_of_F` on class `C` → `Backlink{target: <each id>, p, F}`
      and `ClassField(F,p)`.
    - `_path_to_C` → `Path { from: None, classes: <C and descendants> }`.
-   - `_count` → as the corresponding root field.
+   - `_count(C: <filter>)` → *membership only*: no filter (or `{}`) →
+     `Members(C)`; `{p: {eq: v}}` → `Index{C,p,v}`; any other filter shape →
+     `Members(C)` + `Class(C)`, since the bucket cannot be named. A count is a
+     statement about how many documents exist, so it cannot depend on what any of
+     them contains — `Class(C)` here made paging metadata die on every write.
+     Same for a nested `_count`.
    - unknown field or unknown class → `Class(*)` is not available, so
      `Term::Everything`, or `Bypass` if `cfg.strict`.
 5. **Post-fill augmentation.** After the fill, walk the response for `_id`
    values and add `Doc(id)` for each. This is what makes the cache entry
    entity-precise and is why we inject ids. Signature:
    `pub fn augment_terms_from_response(body: &[u8], terms: &mut Vec<Term>)`.
+6. **The id-only exception.** When every selection set contains only
+   `_id`/`_type` and nested link traversals — no scalar field anywhere — the
+   response contains no field value, so it depends on membership and on where
+   the edges point and on nothing else. Such a query:
+   - takes `Members`/`Index` for its roots (never `Class`), `ClassField(C,p)`
+     for each traversed link property, and `Members(range)` for each traversal's
+     target class (an edge target that is deleted, or recreated under a new
+     identity, changes the answer without the parent's property moving);
+   - **skips step 5 entirely** (`Augment::None`): a `Doc` term per returned id
+     would reintroduce precisely the field dependence just removed;
+   - **skips injection** (step 3): injection exists to make a value-bearing
+     response mappable to documents, so an id-only query is forwarded verbatim
+     and nothing has to be stripped on the way back.
+
+   The traversal term is the static `ClassField(C,p)` rather than a
+   response-derived `Edge(parent_id,p)` because an id-only selection need not
+   select `_id` at every level, so a walk of the response cannot always name the
+   parent — and a traversal term we failed to emit serves stale ids. The
+   detection is a **proof**: an unknown field, an inline fragment on an unknown
+   type, a `_path_to_`, a backlink, or an object selection with no fields all
+   answer "not id-only" and keep the value-bearing behaviour. This is what lets
+   an ORM's phase-one id list survive field updates while the phase-two
+   `get_documents` fragments invalidate one at a time.
 
 WOQL read-set extraction, by node:
 - `Triple{subject, predicate, object}` / `Link` / `Data`: subject bound to a

@@ -173,13 +173,44 @@ impl FragmentVersion {
 /// position). Several versions coexist because readers latch a position at
 /// request start and must keep seeing a consistent answer even as commits land
 /// underneath them.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct FragmentSlot {
     /// Versions, ordered by `from` descending.
     pub versions: Vec<FragmentVersion>,
+    /// Logical timestamp of the last lookup, from the namespace's own counter.
+    ///
+    /// An `AtomicU64` because a *reader* writes it: a lookup holds a shared
+    /// reference to the slot (a sharded read guard) and must not have to take
+    /// the write side to record that it used the entry. A logical clock rather
+    /// than `Instant` because eviction only ever needs relative recency, and
+    /// because the comparison must be total.
+    last_used: std::sync::atomic::AtomicU64,
+}
+
+impl Clone for FragmentSlot {
+    fn clone(&self) -> Self {
+        Self {
+            versions: self.versions.clone(),
+            last_used: std::sync::atomic::AtomicU64::new(self.last_used()),
+        }
+    }
 }
 
 impl FragmentSlot {
+    /// Record that this slot was just used, at logical time `now`.
+    ///
+    /// Monotonic by construction (the caller's clock only moves forward), so a
+    /// racing older touch cannot make a hot key look cold.
+    pub fn touch(&self, now: u64) {
+        self.last_used
+            .store(now, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The logical time of the last use, for least-recently-used eviction.
+    pub fn last_used(&self) -> u64 {
+        self.last_used.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Insert a version, keeping the list ordered by `from` descending.
     ///
     /// Sorted insertion rather than push-to-front because fills can land out of

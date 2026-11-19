@@ -36,7 +36,7 @@ pub use log::{FiredEntry, FiredLog};
 pub use policy::{Decomposition, FencePolicy, Policy, PolicySet, Refresh};
 pub use writer::NamespaceWriter;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use arc_swap::{ArcSwap, ArcSwapOption};
@@ -104,6 +104,20 @@ pub struct EngineConfig {
     /// Hard cap on retained versions per key, as a backstop against unbounded
     /// history on a hot key.
     pub max_versions_per_key: usize,
+    /// Hard cap on the *number* of fragment keys tracked per namespace.
+    ///
+    /// The other two bounds are per-key: `memory_budget_mb` bounds bodies in
+    /// the store and `max_versions_per_key` bounds versions within one slot.
+    /// Neither bounds how many distinct `(key, shape)` pairs have ever been
+    /// asked for, and decomposition made that one entry per *document* rather
+    /// than per response — so without this the slot map and the term index grow
+    /// with the query log. Over the cap the writer drops least-recently-used
+    /// keys, slot and index registration together.
+    ///
+    /// This is Noria's partial state: derived state can always be dropped,
+    /// because it can be refilled. The cost of a low cap is refills, never a
+    /// wrong answer. `0` means unbounded, which only tests should want.
+    pub max_tracked_keys: usize,
     /// How many positions behind the head a closed version is kept, so readers
     /// that latched a moment ago still find their answer. Until the frontend
     /// tracks live readers (phase D) this is the only reader-safety margin.
@@ -122,6 +136,12 @@ impl Default for EngineConfig {
             policy: PolicySet::new(Policy::default()),
             fired_log_capacity: 1024,
             max_versions_per_key: 8,
+            // 50k keys per namespace. Metadata is roughly 1-2 KiB per key (the
+            // key, its versions' dependency lists, and the index entry that
+            // duplicates them), plus any body held inline (<= 16 KiB by
+            // policy, typically a few hundred bytes), so the realistic cost is
+            // tens to low hundreds of MiB per namespace.
+            max_tracked_keys: 50_000,
             version_retention: 64,
             commit_ring_capacity: 1024,
         }
@@ -232,6 +252,10 @@ pub(crate) struct NsState {
     /// is still below `p`. The fence compares against its latched watermark for
     /// exactly that reason.
     pub(crate) commits: DashMap<CommitId, Position>,
+    /// Logical clock for least-recently-used accounting: every lookup takes a
+    /// tick and stamps the slot it touched. One relaxed fetch-add per lookup,
+    /// which is the same order of cost as the metrics counter next to it.
+    pub(crate) clock: AtomicU64,
     pub(crate) schema_dirty: AtomicBool,
     pub(crate) schema_notify: Notify,
     pub(crate) tx: mpsc::UnboundedSender<WriterMsg>,
@@ -257,6 +281,7 @@ impl NsState {
             schema: ArcSwap::from_pointee(SchemaIndex::default()),
             slots: DashMap::new(),
             commits: DashMap::new(),
+            clock: AtomicU64::new(0),
             schema_dirty: AtomicBool::new(false),
             schema_notify: Notify::new(),
             tx,
@@ -321,10 +346,14 @@ impl Engine {
             .namespaces
             .get(&key.ns)
             .and_then(|state| {
-                state
-                    .slots
-                    .get(key)
-                    .and_then(|slot| slot.covering(at).cloned())
+                state.slots.get(key).and_then(|slot| {
+                    // Record the use even when no version covers `at`: the key
+                    // is being asked for, which is what eviction should weigh,
+                    // and a key whose only version is too new is precisely one
+                    // we are about to refill.
+                    slot.touch(state.clock.fetch_add(1, Ordering::Relaxed));
+                    slot.covering(at).cloned()
+                })
             })
             .map(Arc::new);
         match found {

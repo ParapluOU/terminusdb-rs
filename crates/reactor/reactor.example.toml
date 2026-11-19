@@ -39,6 +39,16 @@ memory_budget_mb = 512
 # Keep at most this many versions per fragment key. Older versions are dropped
 # once no live reader is latched below them.
 max_versions_per_key = 4
+# Keep at most this many fragment keys per namespace. This is the bound nothing
+# else provides: `memory_budget_mb` bounds cached bodies and
+# `max_versions_per_key` bounds versions within one key, but neither bounds how
+# many distinct keys exist — and because a document list is cached as one
+# fragment per document, that grows with the number of documents read. Over the
+# cap the least-recently-used keys are dropped, slot and dependency index
+# together; the bodies stay in the content-addressed store, so an eviction costs
+# a refill and nothing else. Reckon 1-2 KiB of metadata per key plus any inlined
+# body, and watch `reactor_keys_evicted`.
+max_tracked_keys = 50000
 # A cacheable response larger than this is streamed through and not cached: we
 # need the whole body in memory to hash it, and that is not worth it past a
 # point. Bypassed and streaming responses are never buffered regardless.

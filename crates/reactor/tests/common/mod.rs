@@ -842,6 +842,32 @@ pub mod models {
         pub city: String,
     }
 
+    /// A document with a traversable link to another document.
+    ///
+    /// `Ref<T>` is a graph edge (an object property), not a stored id string,
+    /// which is what makes `{ Team { _id lead { _id } } }` a *traversal* in
+    /// GraphQL and so the shape the ORM's phase-one id query actually takes.
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
+    #[tdb(id_field = "id")]
+    pub struct Team {
+        /// Stable id.
+        pub id: EntityIDFor<Self>,
+        /// A value property, so a test can change a field without touching the
+        /// edge.
+        pub name: String,
+        /// The edge.
+        pub lead: Ref<Person>,
+    }
+
+    /// Build a `Team` pointing at a `Person` by id.
+    pub fn team(id: &str, name: &str, lead: &str) -> anyhow::Result<Team> {
+        Ok(Team {
+            id: EntityIDFor::new(id)?,
+            name: name.to_owned(),
+            lead: Ref::from(EntityIDFor::<Person>::new(lead)?),
+        })
+    }
+
     /// A document that owns a subdocument.
     #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
     #[tdb(id_field = "id")]

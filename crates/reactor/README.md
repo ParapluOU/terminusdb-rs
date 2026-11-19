@@ -75,6 +75,28 @@ is cached as a *membership spine* over **one fragment per document**, so a field
 change to one member costs one child refill rather than the whole list — see
 [Russian-doll decomposition](#russian-doll-decomposition) below.
 
+**Counts and id lists depend on membership, not on field values.** This is the
+other half of the same idea, and it matters because applications (and
+`terminusdb-orm`) read in two steps: first ask *which* documents, then batch-load
+*what is in them*. The two questions have different dependencies and Reactor
+keeps them apart:
+
+| Read | Depends on |
+|---|---|
+| `_count(Person: {})`, `?type=Person&counted=true` | `Members(Person)` — a create or a delete, nothing else |
+| `_count(Person: {name: {eq: "Ann"}})` | `Index{Person,name,"Ann"}` — a document entering or leaving the bucket |
+| `{ Person { _id tickets { _id } } }` | membership, plus the traversed properties and their targets' membership |
+| `{ Person { _id name } }` | the above **and** every returned document's contents |
+
+So a total count survives every field edit — the case it most needs to survive,
+since paging metadata is re-read on every write — while an id-only GraphQL
+selection survives field edits to the very documents it lists, and still dies
+when an edge is re-pointed, a member appears, or a target is deleted. Put one
+scalar field anywhere in the selection and it goes back to depending on field
+values, because then a field value is in the response. Reactor requires a
+*proof* of id-only-ness: an unknown field, a backlink or a `_path_to_` is enough
+to fall back, because under-invalidating an id list serves stale ids.
+
 **WOQL is opt-in.** A WOQL query can return data without revealing which
 entities the data was derived from:
 
@@ -250,6 +272,16 @@ cargo run -p terminusdb-reactor -- --config crates/reactor/reactor.example.toml
 Point your clients at Reactor's `listen` address instead of TerminusDB's, and
 the load balancer at the Reactors rather than the nodes. `reactor.example.toml`
 documents every knob.
+
+Three of them bound memory, and they bound different things: `memory_budget_mb`
+bounds cached **bodies**, `max_versions_per_key` bounds **versions** within one
+key, and `max_tracked_keys` bounds the **number of keys** a namespace tracks.
+Only the third bounds growth with the query log — and since a document list is
+cached as one fragment per document, that is growth with the number of documents
+read. Over the cap the least-recently-used keys are dropped, slot and dependency
+index together, while the bodies stay in the content-addressed store: an
+eviction costs a refill and nothing else. `reactor_keys_evicted` says whether
+the working set is larger than the cap.
 
 ```bash
 cargo test -p terminusdb-reactor

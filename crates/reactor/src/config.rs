@@ -134,6 +134,21 @@ pub struct CacheConfig {
     pub dir: Option<PathBuf>,
     /// Versions retained per fragment key.
     pub max_versions_per_key: usize,
+    /// Fragment keys tracked per namespace, as a count.
+    ///
+    /// The bound nothing else provides: `memory_budget_mb` bounds cached
+    /// *bodies* and `max_versions_per_key` bounds versions *within* a key, but
+    /// neither bounds how many distinct keys exist — and since a document list
+    /// is cached as one fragment per document, that grows with the number of
+    /// documents read, not the number of requests. Over the cap the
+    /// least-recently-used keys are dropped (slot and term index together); the
+    /// bodies stay in the content-addressed store, so an eviction costs a
+    /// refill and nothing else.
+    ///
+    /// A count rather than a byte budget because it is the number an operator
+    /// can reason about: it is the size of the working set you are promising to
+    /// keep warm. Reckon 1-2 KiB of metadata per key plus any inlined body.
+    pub max_tracked_keys: usize,
     /// Responses larger than this are streamed through and never cached.
     ///
     /// Not in the example file: a buffer limit is a safety property rather than
@@ -158,6 +173,7 @@ impl Default for CacheConfig {
             memory_budget_mb: 512,
             dir: None,
             max_versions_per_key: 4,
+            max_tracked_keys: 50_000,
             max_cacheable_body_mb: 8,
             decompose: true,
         }
@@ -396,6 +412,9 @@ impl Config {
         if self.cache.max_versions_per_key == 0 {
             bail!("[cache].max_versions_per_key must be at least 1");
         }
+        if self.cache.max_tracked_keys == 0 {
+            bail!("[cache].max_tracked_keys must be at least 1");
+        }
         if self.capture.poll_interval_ms == 0 {
             bail!("[capture].poll_interval_ms must be at least 1");
         }
@@ -483,6 +502,7 @@ impl Config {
                 ..Policy::default()
             }),
             max_versions_per_key: self.cache.max_versions_per_key,
+            max_tracked_keys: self.cache.max_tracked_keys,
             ..EngineConfig::default()
         }
     }

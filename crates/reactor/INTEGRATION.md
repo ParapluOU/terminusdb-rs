@@ -37,6 +37,13 @@ branch = "main"
 default for an unknown database, and it is also the way to roll out gradually:
 add one namespace, watch it, add the next.
 
+Everything else has a default. The one worth sizing deliberately is
+`[cache].max_tracked_keys` (50 000): it is how many fragment keys a namespace
+keeps, and since a document list is cached as one fragment per document, it is
+effectively the size of the working set you are promising to keep warm. Over the
+cap the least-recently-used keys are dropped and later refilled — a hit-rate
+cost, never a correctness one.
+
 ## 2. Run
 
 ```bash
@@ -212,6 +219,12 @@ decomposition is earning its keep:
 | `reactor_children_filled` / `reactor_child_batches` | a ratio near 1 means almost every refill fetches a single document; the batch is not being filled |
 | `reactor_compositions_abandoned` | anything but near zero: compositions are falling back to whole fetches |
 
+And one for memory: `reactor_keys_evicted` rising steadily means the working set
+is larger than `[cache].max_tracked_keys`, so keys are being dropped and
+refilled. That is correct behaviour (an evicted key is a miss, never a wrong
+answer) but it costs upstream requests; raise the cap if there is memory for it.
+`reactor_tracked_keys` is the current count.
+
 ## 8. Rolling it out
 
 1. Start with `[analyze].strict = true`. Anything Reactor cannot prove it may
@@ -231,6 +244,14 @@ decomposition is earning its keep:
   or WOQL response is still cached whole, so a change to anything it depends on
   rebuilds all of it. For GraphQL that is deliberate: a nested selection has no
   framing to learn, and splicing one would mean re-emitting a body.
+- **A GraphQL selection that mixes ids and field values depends on both.** Ask
+  for ids and traversals alone (`{ Person { _id tickets { _id } } }`) and the
+  answer depends on membership and edges only, so it survives every field edit;
+  add one scalar (`name`) and it depends on the contents of every document it
+  returns. That is not a tuning knob, it is what the response contains — and it
+  is why `terminusdb-orm`'s two-step pattern (ids by GraphQL, bodies by
+  `get_documents`) caches so much better than one fat query: the id list survives
+  writes, and the per-document fragments invalidate one at a time.
 - **No eager recomputation.** Invalidation drops an entry; the next reader pays
   to refill it.
 - **The shared cache tier is unproven across nodes.** The filesystem store works
