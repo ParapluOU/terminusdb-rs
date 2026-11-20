@@ -938,6 +938,58 @@ impl<'a> XmlToInstanceParser<'a> {
     ///
     /// This walks the DOM tree in document order instead of going through
     /// JSON (which loses inter-element ordering).
+    /// Whether `class_name` or one of its ancestors declares `property`.
+    fn class_declares_property(&self, class_name: &str, property: &str) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        let mut frontier = vec![class_name.to_string()];
+        while let Some(name) = frontier.pop() {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            match self.schemas.get(&name) {
+                Some(Schema::Class {
+                    properties,
+                    inherits,
+                    ..
+                }) => {
+                    if properties.iter().any(|p| p.name == property) {
+                        return true;
+                    }
+                    frontier.extend(inherits.iter().cloned());
+                }
+                Some(Schema::TaggedUnion { properties, .. }) => {
+                    if properties.iter().any(|p| p.name == property) {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// The `{Type}Child` union a class's ordered `children` property is typed
+    /// as, following `@inherits` when the class inherits the property instead of
+    /// declaring it.
+    fn resolve_child_union(&self, class_name: &str) -> Option<&Schema> {
+        let mut seen = std::collections::HashSet::new();
+        let mut frontier = vec![class_name.to_string()];
+
+        while let Some(name) = frontier.pop() {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            if let Some(union) = self.schemas.get(&format!("{name}Child")) {
+                return Some(union);
+            }
+            // Not here — try what this class inherits from.
+            if let Some(Schema::Class { inherits, .. }) = self.schemas.get(&name) {
+                frontier.extend(inherits.iter().cloned());
+            }
+        }
+        None
+    }
+
     pub fn xml_element_to_instance(&self, elem: &Element) -> ParseResult<Instance> {
         let class_name = self.resolve_class_name(elem.local_name());
 
@@ -981,18 +1033,38 @@ impl<'a> XmlToInstanceParser<'a> {
                 qname.local_name.clone()
             };
 
+            // Only attributes the class actually declares can be stored.
+            //
+            // Attributes contributed by an *imported* schema — `xml:lang` and
+            // `xml:space` come from the xml.xsd attribute group that DITA and
+            // NISO-STS import — never reach XsdComplexType::attributes, so the
+            // generator cannot declare properties for them, while the XML
+            // document obviously still carries them. Emitting them anyway makes
+            // the whole document unstorable (`unknown_property_for_type`), so
+            // they are dropped here instead. Anything the generator does know
+            // about is kept, including namespaced attributes like `xlink:href`.
+            if !self.class_declares_property(&class_name, &attr_name) {
+                continue;
+            }
+
             instance.properties.insert(
                 attr_name,
                 InstanceProperty::Primitive(PrimitiveValue::String(value.clone())),
             );
         }
 
-        // Build children list (ordered)
-        let child_union_name = format!("{}Child", class_name);
-        let has_child_union = self.schemas.contains_key(&child_union_name);
+        // Build children list (ordered).
+        //
+        // The union may be inherited rather than this class's own: the generator
+        // skips redefining `children` when a base type already declares it (a
+        // second declaration would be a diamond-property violation), so a
+        // subclass has no `{Class}Child` of its own and must use its base's.
+        // Looking only at `{Class}Child` left the inherited — and required —
+        // `children` field unset, which the server rejects with
+        // `required_field_does_not_exist_in_document`.
+        let child_union = self.resolve_child_union(&class_name);
 
-        if has_child_union {
-            let child_union_schema = self.schemas.get(&child_union_name).unwrap();
+        if let Some(child_union_schema) = child_union {
             let mut children = Vec::new();
 
             // Mixed content: text and elements in document order. A run of

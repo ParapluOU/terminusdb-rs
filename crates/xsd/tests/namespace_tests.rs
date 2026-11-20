@@ -205,10 +205,6 @@ fn test_both_schemas_have_same_class_name_different_namespace() {
 // ============================================================================
 
 #[tokio::test]
-#[ignore = "the generator emits property IRIs under terminusdb:///schema# rather than \
-the schema context it was given, so the insert fails schema check. Same crates/xsd \
-prefix/context gap as db_integration_tests; never green (this crate's test targets \
-did not compile before)."]
 async fn test_insert_schema_with_context() -> anyhow::Result<()> {
     let xsd_path = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -279,10 +275,13 @@ async fn test_insert_schema_with_context() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "the generator emits property IRIs under terminusdb:///schema# rather than \
-the schema context it was given, so the insert fails schema check. Same crates/xsd \
-prefix/context gap as db_integration_tests; never green (this crate's test targets \
-did not compile before)."]
+#[ignore = "two XSD namespaces that define the same class names cannot share one \
+TerminusDB database: a database has a single @context/@schema, so a bare @type \
+expands to whichever context is current (the library document ends up typed as \
+http://example.com/book#DocumentTypeChild -> unknown_property_for_type), while a \
+fully qualified @type is refused outright with ascribed_type_not_subsumed because \
+the server matches classes by their context-compressed name. Both routes verified \
+against v12.1.0-rc3. Use one database per namespace."]
 async fn test_insert_multiple_namespaces_same_database() -> anyhow::Result<()> {
     let book_path = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -321,6 +320,15 @@ async fn test_insert_multiple_namespaces_same_database() -> anyhow::Result<()> {
                     eprintln!("Book schema {}: {}", i, serde_json::to_string_pretty(json)?);
                 }
                 let book_schema_refs: Vec<_> = book_schema_jsons.iter().collect();
+                // The @context must be committed before documents that resolve
+                // against it, so schemas go in through insert_schema_with_context.
+                client
+                    .insert_schema_with_context(
+                        book_model_ref.context().clone(),
+                        Vec::new(),
+                        args.clone(),
+                    )
+                    .await?;
                 let book_result = client
                     .insert_documents(book_schema_refs, args.clone().as_schema())
                     .await?;
@@ -358,10 +366,13 @@ async fn test_insert_multiple_namespaces_same_database() -> anyhow::Result<()> {
                 let book_instances = book_model_ref.parse_xml_to_instances(book_xml)?;
                 assert!(!book_instances.is_empty(), "Should parse book XML");
 
-                // Use to_namespaced_json for fully-qualified @type
+                // Bare @type: the committed @context expands it. A fully
+                // qualified @type is rejected with ascribed_type_not_subsumed —
+                // the server matches the class under its context-compressed
+                // name, not by IRI.
                 let book_instance_jsons: Vec<serde_json::Value> = book_instances
                     .iter()
-                    .map(|inst| inst.to_namespaced_json())
+                    .map(|inst| inst.to_json())
                     .collect();
                 for (i, json) in book_instance_jsons.iter().enumerate() {
                     eprintln!(
@@ -385,10 +396,10 @@ async fn test_insert_multiple_namespaces_same_database() -> anyhow::Result<()> {
                 let library_instances = library_model_ref.parse_xml_to_instances(library_xml)?;
                 assert!(!library_instances.is_empty(), "Should parse library XML");
 
-                // Use to_namespaced_json for fully-qualified @type
+                // Bare @type, as above.
                 let library_instance_jsons: Vec<serde_json::Value> = library_instances
                     .iter()
-                    .map(|inst| inst.to_namespaced_json())
+                    .map(|inst| inst.to_json())
                     .collect();
                 for (i, json) in library_instance_jsons.iter().enumerate() {
                     eprintln!(

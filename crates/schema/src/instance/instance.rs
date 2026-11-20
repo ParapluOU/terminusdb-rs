@@ -502,9 +502,13 @@ impl Instance {
             }
         }
 
-        // Property names remain short - TerminusDB validates against schema
+        // Property names remain short - TerminusDB validates against schema.
+        // Values recurse through the namespaced path so nested subdocuments and
+        // tagged-union children carry a qualified @type too; a bare one would
+        // resolve against the default prefix and fail as
+        // `ascribed_type_does_not_exist`.
         for (propkey, propval) in &self.properties {
-            map.insert(propkey.clone(), propval.clone().into());
+            map.insert(propkey.clone(), propval.to_namespaced_value());
         }
 
         serde_json::Value::Object(map)

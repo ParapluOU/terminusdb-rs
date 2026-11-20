@@ -8,7 +8,7 @@
 //!
 //! When a limitation is fixed, update the test to verify correct behavior.
 
-use terminusdb_schema::{Schema, TypeFamily};
+use terminusdb_schema::{Property, Schema, TypeFamily};
 use terminusdb_xsd::schema_generator::XsdToSchemaGenerator;
 use terminusdb_xsd::schema_model::{
     Cardinality, ChildElement, SimpleTypeVariety, XsdComplexType, XsdSchema, XsdSimpleType,
@@ -78,6 +78,17 @@ fn create_union_type_schema() -> XsdSchema {
             ]),
         }],
     }
+}
+
+/// A variant of a complex type's generated children union.
+fn child_variant<'a>(schemas: &'a [Schema], type_name: &str, element: &str) -> Option<&'a Property> {
+    let union_name = format!("{type_name}Child");
+    schemas.iter().find_map(|s| match s {
+        Schema::TaggedUnion { id, properties, .. } if *id == union_name => {
+            properties.iter().find(|p| p.name == element)
+        }
+        _ => None,
+    })
 }
 
 #[test]
@@ -239,10 +250,6 @@ fn create_list_type_schema() -> XsdSchema {
 }
 
 #[test]
-#[ignore = "the generated class does not carry the expected property at all, so the \
-Set-vs-List question this test asks cannot be reached. Same crates/xsd generator gap \
-as the xs:choice and element tests; never green (this crate's test targets did not \
-compile before)."]
 fn test_limitation_unbounded_uses_set_not_list() {
     // This test documents that elements with maxOccurs="unbounded"
     // are converted to TypeFamily::Set, not TypeFamily::List.
@@ -264,22 +271,28 @@ fn test_limitation_unbounded_uses_set_not_list() {
 
     let container = find_class(&schemas, "DataContainer").expect("DataContainer should exist");
 
+    // Repetition of a child element is expressed by the enclosing ordered
+    // `children: List<DataContainerChild>` rather than by a per-element Set:
+    // the element appears as a union variant, and the List admits any number of
+    // them in document order. The trade-off is that a *per-element* bound
+    // (minOccurs/maxOccurs on one branch) is no longer represented, so TDB does
+    // not enforce it — the XSD content model remains the authority there.
     if let Schema::Class { properties, .. } = container {
-        let items_prop = properties.iter().find(|p| p.name == "items");
-        assert!(items_prop.is_some(), "items property should exist");
-
-        let items = items_prop.unwrap();
-        // minOccurs=0 with maxOccurs=unbounded → Set or Optional
-        let is_set_or_optional = matches!(
-            items.r#type,
-            Some(TypeFamily::Set(_)) | Some(TypeFamily::Optional)
-        );
-        assert!(
-            is_set_or_optional,
-            "Unbounded elements should use Set or Optional. Got {:?}",
-            items.r#type
-        );
+        let children = properties
+            .iter()
+            .find(|p| p.name == "children")
+            .expect("DataContainer should carry the ordered children property");
+        assert_eq!(children.r#type, Some(TypeFamily::List));
+        assert_eq!(children.class, "DataContainerChild");
     }
+
+    let items = child_variant(&schemas, "DataContainer", "items")
+        .expect("items should be a variant of DataContainerChild");
+    // An ordinary repeating element carries no family of its own.
+    assert_eq!(
+        items.r#type, None,
+        "a repeating element's multiplicity lives on `children`, not the variant"
+    );
 }
 
 /// Creates an XSD schema with a list type property to verify TypeFamily::List generation
@@ -332,10 +345,6 @@ fn create_list_property_schema() -> XsdSchema {
 }
 
 #[test]
-#[ignore = "the generated class does not carry the expected property at all, so the \
-Set-vs-List question this test asks cannot be reached. Same crates/xsd generator gap \
-as the xs:choice and element tests; never green (this crate's test targets did not \
-compile before)."]
 fn test_list_type_generates_type_family_list() {
     // This test verifies that our schema_generator.rs DOES correctly generate
     // TypeFamily::List when the variety is List.
@@ -350,20 +359,19 @@ fn test_list_type_generates_type_family_list() {
     let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator.generate(&xsd_schema).unwrap();
 
-    let container = find_class(&schemas, "DataWithList").expect("DataWithList should exist");
+    find_class(&schemas, "DataWithList").expect("DataWithList should exist");
 
-    if let Schema::Class { properties, .. } = container {
-        let scores_prop = properties.iter().find(|p| p.name == "scores");
-        assert!(scores_prop.is_some(), "scores property should exist");
-
-        let scores = scores_prop.unwrap();
-        assert_eq!(
-            scores.r#type,
-            Some(TypeFamily::List),
-            "When variety=List, schema generator should produce TypeFamily::List. Got {:?}",
-            scores.r#type
-        );
-    }
+    // An xs:list element holds space-separated values inside ONE element, which
+    // the enclosing `children` list cannot express — so unlike a merely
+    // repeating element, this variant keeps TypeFamily::List.
+    let scores = child_variant(&schemas, "DataWithList", "scores")
+        .expect("scores should be a variant of DataWithListChild");
+    assert_eq!(
+        scores.r#type,
+        Some(TypeFamily::List),
+        "an xs:list-typed element should keep TypeFamily::List on its variant. Got {:?}",
+        scores.r#type
+    );
 }
 
 #[test]

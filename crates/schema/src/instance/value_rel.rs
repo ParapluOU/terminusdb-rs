@@ -122,6 +122,48 @@ impl From<Instance> for RelationValue {
     }
 }
 
+impl RelationValue {
+    /// Like `Into<Value>`, but nested instances keep their namespace-qualified
+    /// `@type` (see `Instance::to_namespaced_json`).
+    ///
+    /// The plain conversion renders nested instances with a bare class name. In
+    /// a namespaced database that name resolves against the default prefix, so
+    /// the server rejects the document with `ascribed_type_does_not_exist` —
+    /// the subdocument's type only exists under the schema's own namespace.
+    pub fn to_namespaced_value(&self) -> Value {
+        match self {
+            RelationValue::ExternalReference(r) => Value::String(r.clone()),
+            RelationValue::ExternalReferences(rs) => rs.clone().into(),
+            RelationValue::One(o) => {
+                if o.is_reference() {
+                    Value::String(o.id().unwrap().clone())
+                } else {
+                    o.clone().set_id_capture(false).to_namespaced_json()
+                }
+            }
+            RelationValue::More(m) => m
+                .iter()
+                .map(|i| i.clone().set_id_capture(false).to_namespaced_json())
+                .collect::<Vec<Value>>()
+                .into(),
+            RelationValue::TransactionRef(r) => {
+                let mut map = serde_json::Map::new();
+                map.insert("@ref".to_string(), r.clone().into());
+                map.into()
+            }
+            RelationValue::TransactionRefs(rs) => rs
+                .iter()
+                .map(|r| {
+                    let mut map = serde_json::Map::new();
+                    map.insert("@ref".to_string(), r.clone().into());
+                    Value::from(map)
+                })
+                .collect::<Vec<Value>>()
+                .into(),
+        }
+    }
+}
+
 impl Into<serde_json::Value> for RelationValue {
     fn into(self) -> Value {
         match self {

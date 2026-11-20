@@ -43,10 +43,6 @@ fn test_feature_global_element() {
 /// Schema: DITA basetopic.xsd
 /// Validates: Parse XML → Instances → Insert into TDB
 #[tokio::test]
-#[ignore = "asserts XSD generator behaviour that is not implemented: the DITA topic \
-schema does not come out with the expected element properties. Part of the same \
-crates/xsd gap as the xs:choice tests; surfaced only once this crate's test targets \
-compiled again (missing dev-dependencies), so it was never green."]
 async fn test_feature_global_element_insertion() -> anyhow::Result<()> {
     let model =
         XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
@@ -70,9 +66,14 @@ async fn test_feature_global_element_insertion() -> anyhow::Result<()> {
     server
         .with_tmp_db("test_global_element", |client, spec| {
             let schemas = valid_schemas.clone();
+            // DITA names properties under the ditaarch: prefix, so the @context
+            // declaring it must be committed with the schemas.
+            let ctx = model.context().clone();
             async move {
                 let args = DocumentInsertArgs::from(spec.clone());
-                client.insert_schema_instances(schemas, args).await?;
+                client
+                    .insert_schema_with_context(ctx, schemas, args)
+                    .await?;
                 Ok(())
             }
         })
@@ -91,21 +92,18 @@ async fn test_feature_global_element_insertion() -> anyhow::Result<()> {
 /// Schema: DITA basetopic.xsd
 /// Validates: Child elements become class properties
 #[test]
-#[ignore = "asserts XSD generator behaviour that is not implemented: the DITA topic \
-schema does not come out with the expected element properties. Part of the same \
-crates/xsd gap as the xs:choice tests; surfaced only once this crate's test targets \
-compiled again (missing dev-dependencies), so it was never green."]
 fn test_feature_local_element_in_sequence() {
     let model =
         XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
-    // Topic should have title as a property (local element in sequence)
+    // A local element in a sequence is a variant of the type's (possibly
+    // inherited) children union, not a property of the class itself.
     if let Some(topic) = find_class(schemas, "Topic") {
         assert!(
-            has_property(topic, "title"),
-            "Topic class should have 'title' property for local element"
+            has_child_element(schemas, "Topic", "title"),
+            "Topic should accept the local element 'title'"
         );
         print_class_details(topic);
     }
@@ -117,21 +115,19 @@ fn test_feature_local_element_in_sequence() {
 /// Schema: DITA basetopic.xsd
 /// Validates: title is required in topic
 #[test]
-#[ignore = "asserts XSD generator behaviour that is not implemented: the DITA topic \
-schema does not come out with the expected element properties. Part of the same \
-crates/xsd gap as the xs:choice tests; surfaced only once this crate's test targets \
-compiled again (missing dev-dependencies), so it was never green."]
 fn test_feature_required_element() {
     let model =
         XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
-    // Title is required in topic
-    if let Some(topic) = find_class(schemas, "Topic") {
+    // Title is required in topic. Required-ness is carried by the ordered
+    // children list (a required List), not per element — the union variant only
+    // says the element is permitted.
+    if find_class(schemas, "Topic").is_some() {
         assert!(
-            has_property(topic, "title"),
-            "Topic should have required 'title' element"
+            has_child_element(schemas, "Topic", "title"),
+            "Topic should accept the required element 'title'"
         );
     }
 }

@@ -711,10 +711,6 @@ fn test_parse_all_niso_samples() {
 // ============================================================================
 
 #[tokio::test]
-#[ignore = "fails with api:UnknownPrefixError (e.g. 'xlink:actuate'): the generator \
-emits property keys under namespace prefixes it never declares in the schema \
-@context, although it does collect them into XsdSchema::namespace_prefixes. One \
-defect behind every ignored insertion test in this crate."]
 async fn test_insert_niso_schemas_into_terminusdb() -> anyhow::Result<()> {
     let model = XsdModel::from_file(&niso_sts_xsd_path(), None::<&str>)
         .expect("Failed to load NISO-STS model");
@@ -736,11 +732,14 @@ async fn test_insert_niso_schemas_into_terminusdb() -> anyhow::Result<()> {
     server
         .with_tmp_db("test_niso_schemas", |client, spec| {
             let schemas = valid_schemas.clone();
+            // NISO-STS names properties under xlink: and friends, so the
+            // @context declaring those prefixes must be committed with them.
+            let ctx = model.context().clone();
             async move {
                 let args = DocumentInsertArgs::from(spec.clone());
 
                 client
-                    .insert_schema_instances(schemas.clone(), args)
+                    .insert_schema_with_context(ctx, schemas.clone(), args)
                     .await?;
 
                 println!("✓ Successfully inserted {} NISO-STS schemas", schemas.len());
@@ -826,10 +825,6 @@ fn debug_addr_line_child_elements() {
 /// This validates group reference resolution (xs:group ref="...") which is critical
 /// for JATS/NISO-STS schemas that use model groups extensively.
 #[tokio::test]
-#[ignore = "fails with api:UnknownPrefixError (e.g. 'xlink:actuate'): the generator \
-emits property keys under namespace prefixes it never declares in the schema \
-@context, although it does collect them into XsdSchema::namespace_prefixes. One \
-defect behind every ignored insertion test in this crate."]
 async fn test_full_niso_flow_with_rfc8142() -> anyhow::Result<()> {
     let model = XsdModel::from_file(&niso_sts_xsd_path(), None::<&str>)
         .expect("Failed to load NISO-STS model");
@@ -857,13 +852,19 @@ async fn test_full_niso_flow_with_rfc8142() -> anyhow::Result<()> {
                 .with_tmp_db("test_niso_full_flow", |client, spec| {
                     let schemas = filter_valid_schemas(model.schemas()).clone();
                     let insts = instances.clone();
+                    let ctx = model.context().clone();
                     async move {
                         let args = DocumentInsertArgs::from(spec.clone());
 
-                        // Insert schemas
+                        // Insert schemas, with the @context that declares the
+                        // prefixes their property keys use.
                         if !schemas.is_empty() {
                             client
-                                .insert_schema_instances(schemas.clone(), args.clone())
+                                .insert_schema_with_context(
+                                    ctx.clone(),
+                                    schemas.clone(),
+                                    args.clone(),
+                                )
                                 .await?;
                             println!("Step 3a: Inserted {} schemas", schemas.len());
                         }

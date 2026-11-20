@@ -236,11 +236,6 @@ fn test_analyze_schema_dependencies() {
 
 /// Test inserting valid schemas (those with all dependencies satisfied) into TerminusDB
 #[tokio::test]
-#[ignore = "the generator emits property keys under namespace prefixes (e.g. \
-`ditaarch:DITAArchVersion`) without declaring them in the schema @context, so the \
-server rejects the insert with api:UnknownPrefixError. Needs prefix emission in \
-crates/xsd (see the /api/prefix endpoint); these tests only became visible once \
-this crate's test targets compiled again, so they were never green."]
 async fn test_insert_valid_schemas_into_terminusdb() -> anyhow::Result<()> {
     let topic_path = dita_topic_xsd_path();
 
@@ -264,11 +259,16 @@ async fn test_insert_valid_schemas_into_terminusdb() -> anyhow::Result<()> {
     server
         .with_tmp_db("test_valid_schemas", |client, spec| {
             let schemas = valid_schemas.clone();
+            let ctx = model.context().clone();
             async move {
                 let args = DocumentInsertArgs::from(spec.clone());
 
+                // The schemas name properties under the XSD's namespace prefixes
+                // (e.g. `ditaarch:DITAArchVersion`), so the @context declaring
+                // those prefixes has to go in with them — otherwise the server
+                // rejects the insert with api:UnknownPrefixError.
                 client
-                    .insert_schema_instances(schemas.clone(), args)
+                    .insert_schema_with_context(ctx.clone(), schemas.clone(), args)
                     .await?;
 
                 println!("Successfully inserted {} valid schemas", schemas.len());
@@ -340,11 +340,6 @@ async fn test_insert_minimal_subset_schemas() -> anyhow::Result<()> {
 ///
 /// Once xmlschema-rs supports `xs:redefine`, the full flow should work correctly.
 #[tokio::test]
-#[ignore = "the generator emits property keys under namespace prefixes (e.g. \
-`ditaarch:DITAArchVersion`) without declaring them in the schema @context, so the \
-server rejects the insert with api:UnknownPrefixError. Needs prefix emission in \
-crates/xsd (see the /api/prefix endpoint); these tests only became visible once \
-this crate's test targets compiled again, so they were never green."]
 async fn test_full_xsd_xml_flow_documents_limitations() -> anyhow::Result<()> {
     let topic_path = dita_topic_xsd_path();
 
@@ -508,6 +503,9 @@ async fn test_full_xsd_xml_flow_documents_limitations() -> anyhow::Result<()> {
                 .with_tmp_db("test_full_flow", |client, spec| {
                     let schemas = filter_valid_schemas(model.schemas()).clone();
                     let insts = instances.clone();
+                    // DITA names properties under the ditaarch: prefix, so the
+                    // @context declaring it has to be committed with them.
+                    let ctx = model.context().clone();
                     async move {
                         let args = DocumentInsertArgs::from(spec.clone());
 
@@ -547,7 +545,7 @@ async fn test_full_xsd_xml_flow_documents_limitations() -> anyhow::Result<()> {
                                 }
                             }
                             client
-                                .insert_schema_instances(schemas, args.clone())
+                                .insert_schema_with_context(ctx.clone(), schemas, args.clone())
                                 .await?;
                             println!("Step 3a: Inserted schemas");
                         }

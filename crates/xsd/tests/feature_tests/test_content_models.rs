@@ -19,10 +19,6 @@ use terminusdb_xsd::XsdModel;
 /// Schema: DITA basetopic.xsd
 /// Validates: Sequence elements become properties
 #[test]
-#[ignore = "asserts XSD generator behaviour that is not implemented: the DITA topic \
-schema does not come out with the expected element properties. Part of the same \
-crates/xsd gap as the xs:choice tests; surfaced only once this crate's test targets \
-compiled again (missing dev-dependencies), so it was never green."]
 fn test_feature_sequence_compositor() {
     let model =
         XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
@@ -34,10 +30,12 @@ fn test_feature_sequence_compositor() {
         let props = get_property_names(topic);
         println!("Topic properties (from sequence): {:?}", props);
 
-        // Should have title from sequence
+        // `title` comes from the sequence, so it is a variant of Topic's
+        // (inherited) children union rather than a property of Topic itself.
         assert!(
-            has_property(topic, "title"),
-            "Topic should have 'title' from sequence"
+            has_child_element(schemas, "Topic", "title"),
+            "Topic should accept 'title' from its sequence; properties were {:?}",
+            props
         );
     }
 }

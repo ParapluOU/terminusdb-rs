@@ -349,6 +349,28 @@ impl XsdModel {
     /// Returns an error if XML parsing fails, validation fails, or the XML
     /// structure doesn't match the generated schemas.
     pub fn parse_xml_to_instances(&self, xml: &str) -> ParseResult<Vec<Instance>> {
+        // Delegates to the order-preserving walk, because that is the only shape
+        // the schemas this crate generates accept: every complex type with child
+        // elements gets `children: List<{Type}Child>`, so instances carrying one
+        // flat property per child element are rejected with
+        // `unknown_property_for_type`. See parse_xml_to_instances_flat for the
+        // old JSON-mediated shape.
+        self.parse_xml_to_instances_ordered(xml)
+    }
+
+    /// Parse XML into instances with one **flat property per child element**,
+    /// via the intermediate JSON representation.
+    ///
+    /// This does *not* match the schemas [`XsdModel::schemas`] generates: those
+    /// model child elements as an ordered `children: List<{Type}Child>` union,
+    /// so inserting what this returns fails schema check with
+    /// `unknown_property_for_type`. Kept only for callers that consume the
+    /// instances themselves rather than storing them.
+    #[deprecated(
+        since = "0.2.0",
+        note = "produces instances that do not validate against the generated schemas; use parse_xml_to_instances"
+    )]
+    pub fn parse_xml_to_instances_flat(&self, xml: &str) -> ParseResult<Vec<Instance>> {
         // First parse to JSON
         let json = self
             .parse_xml_to_json(xml)

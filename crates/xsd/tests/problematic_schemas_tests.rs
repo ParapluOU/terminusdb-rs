@@ -74,8 +74,8 @@ fn test_akoma_ntoso_schema_parsing() {
 /// TEI P5 is extremely large - requires 512MB stack to parse without overflow.
 #[test]
 #[ignore = "the TEI schema overflows the xsd-parser thread stack even with the 512MB \
-it asks for, aborting the whole test binary (SIGABRT) and taking unrelated tests in \
-this file with it. Points at unbounded recursion over TEI's schema graph."]
+this test asks for, and the abort (SIGABRT) takes every other test in this binary with \
+it. Unbounded recursion over TEI's schema graph, not a stack size to tune."]
 fn test_tei_schema_parsing() {
     let bundle = TeiP5;
     let (_temp_dir, entry_point) = extract_schema(&bundle, "tei_all.xsd");
@@ -220,10 +220,9 @@ async fn test_akoma_ntoso_schema_insertion() -> anyhow::Result<()> {
 ///
 /// TEI parsing requires 512MB stack, so we spawn parsing in a separate thread.
 #[tokio::test]
-#[ignore = "overflows the xsd-parser thread stack and aborts the whole test binary \
-(SIGABRT), taking unrelated tests in this file down with it. It already asks for a \
-512MB stack and still overflows, which points at unbounded recursion over TEI's \
-schema graph rather than a stack size to tune."]
+#[ignore = "the TEI schema overflows the xsd-parser thread stack even with the 512MB \
+this test asks for, and the abort (SIGABRT) takes every other test in this binary with \
+it. Unbounded recursion over TEI's schema graph, not a stack size to tune."]
 async fn test_tei_schema_insertion() -> anyhow::Result<()> {
     let bundle = TeiP5;
     let (_temp_dir, entry_point) = extract_schema(&bundle, "tei_all.xsd");
@@ -408,9 +407,6 @@ fn test_dita13_catalog_structure() {
 ///
 /// This tests the full pipeline: parse XSD with catalog -> generate TDB schemas -> insert.
 #[tokio::test]
-#[ignore = "fails with api:UnknownPrefixError: the generator emits property keys under \
-namespace prefixes it never declares in the schema @context. Same crates/xsd gap as \
-db_integration_tests and namespace_tests."]
 async fn test_dita13_schema_insertion() -> anyhow::Result<()> {
     let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
     Dita13::write_to_directory(temp_dir.path()).expect("Failed to write schema");
@@ -514,9 +510,13 @@ fn test_spl_schema_parsing() {
 /// This tests the full pipeline: parse SPL XSD -> generate TDB schemas -> insert.
 /// Note: SPL parsing requires 256MB stack.
 #[tokio::test]
-#[ignore = "fails with api:UnknownPrefixError: the generator emits property keys under \
-namespace prefixes it never declares in the schema @context. Same crates/xsd gap as \
-db_integration_tests and namespace_tests."]
+#[ignore = "HL7 SPL hits violation_of_diamond_property on `children`: PivlPpdTs inherits \
+the ordered children property from more than one ancestor, each with its own \
+{Type}Child union, and TerminusDB forbids a property arriving by two inheritance \
+paths with different ranges. generate_class_from_complex_type_with_context only \
+checks the single immediate base_type, so it cannot see the clash; fixing it needs \
+real multiple-inheritance analysis (unify the ancestors' unions, or inherit from \
+whichever ancestor already declares it). See test_spl_diamond_inheritance_investigation."]
 async fn test_spl_schema_insertion() -> anyhow::Result<()> {
     let bundle = Spl;
     let (_temp_dir, entry_point) = extract_schema(&bundle, "SPL.xsd");

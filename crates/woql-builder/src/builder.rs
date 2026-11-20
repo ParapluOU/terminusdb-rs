@@ -293,11 +293,38 @@ impl WoqlBuilder {
         let then_query = then_builder.finalize();
         let else_query = else_builder.finalize();
 
+        // Desugared, because the AST's conditional has no else branch: the
+        // authoritative Prolog class is `When { query, consequent }` — run the
+        // consequent for every success of the condition, succeed unchanged when
+        // it fails. An if/then/else therefore becomes the equivalent
+        // (test AND then) OR (NOT test AND else).
+        WoqlBuilder {
+            query: Some(Woql2Query::Or(Woql2Or {
+                or: vec![
+                    Woql2Query::And(Woql2And {
+                        and: vec![test_query.clone(), then_query],
+                    }),
+                    Woql2Query::And(Woql2And {
+                        and: vec![
+                            Woql2Query::Not(Woql2Not {
+                                query: Box::new(test_query),
+                            }),
+                            else_query,
+                        ],
+                    }),
+                ],
+            })),
+        }
+    }
+
+    /// Creates a conditional with only a `then` branch, mapping directly onto
+    /// the AST's `When`: the consequent runs for every solution of the test,
+    /// and the whole query still succeeds when the test has none.
+    pub fn when_then(test_builder: WoqlBuilder, then_builder: WoqlBuilder) -> Self {
         WoqlBuilder {
             query: Some(Woql2Query::If(Woql2If {
-                test: Box::new(test_query),
-                then_query: Box::new(then_query),
-                else_query: Box::new(else_query),
+                query: Box::new(test_builder.finalize()),
+                consequent: Box::new(then_builder.finalize()),
             })),
         }
     }

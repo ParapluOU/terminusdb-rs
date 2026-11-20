@@ -140,6 +140,43 @@ pub fn has_property(schema: &Schema, prop_name: &str) -> bool {
     }
 }
 
+/// Whether `class_name` can carry the child element `element_name`.
+///
+/// A child element is not a property of its parent class: each complex type
+/// with children gets `children: List<{Type}Child>`, a TaggedUnion with one
+/// variant per permitted element, which is what preserves XML document order.
+/// The union may be inherited, so follow `@inherits` when the class does not
+/// declare one itself.
+pub fn has_child_element(schemas: &[Schema], class_name: &str, element_name: &str) -> bool {
+    // A plain property still counts (attributes, text content, leaf types).
+    if let Some(class) = find_class(schemas, class_name) {
+        if has_property(class, element_name) {
+            return true;
+        }
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    let mut frontier = vec![class_name.to_string()];
+    while let Some(name) = frontier.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let union_name = format!("{name}Child");
+        if let Some(Schema::TaggedUnion { properties, .. }) = schemas
+            .iter()
+            .find(|s| matches!(s, Schema::TaggedUnion { id, .. } if *id == union_name))
+        {
+            if properties.iter().any(|p| p.name == element_name) {
+                return true;
+            }
+        }
+        if let Some(Schema::Class { inherits, .. }) = find_class(schemas, &name) {
+            frontier.extend(inherits.iter().cloned());
+        }
+    }
+    false
+}
+
 /// Get property type for a class property
 pub fn get_property_type(schema: &Schema, prop_name: &str) -> Option<String> {
     match schema {

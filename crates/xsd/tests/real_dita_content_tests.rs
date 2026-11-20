@@ -215,10 +215,12 @@ fn test_parse_gnostyx_demo_files() {
 }
 
 #[tokio::test]
-#[ignore = "fails with api:UnknownPrefixError on 'ditaarch:DITAArchVersion': the \
-generator emits property keys under namespace prefixes it never declares in the \
-schema @context. Same crates/xsd gap as db_integration_tests, namespace_tests and \
-problematic_schemas_tests."]
+#[ignore = "incomplete content models for group-referenced children: a real DITA <p> \
+contains <uicontrol>, but PClassChild has no such variant because the element's \
+content comes from XSD group references that xmlschema-rs does not expand into \
+XsdComplexType::child_elements, so the generator never sees them \
+(unknown_property_for_type on PClassChild). Needs group expansion, in the generator \
+or upstream."]
 async fn test_insert_gnostyx_demo_into_terminusdb() -> anyhow::Result<()> {
     let model = XsdModel::from_file(&dita_ditabase_xsd_path(), None::<&str>)
         .expect("Failed to load DITA topic model");
@@ -334,6 +336,9 @@ async fn test_insert_gnostyx_demo_into_terminusdb() -> anyhow::Result<()> {
     server
         .with_tmp_db("test_gnostyx_demo", |client, spec| {
             let schemas = filter_valid_schemas(model.schemas());
+            // DITA names properties under the ditaarch: prefix, so the @context
+            // declaring it must be committed with the schemas.
+            let ctx = model.context().clone();
 
             // Debug: check UlClass and Conbody AFTER filtering
             for schema in &schemas {
@@ -372,7 +377,10 @@ async fn test_insert_gnostyx_demo_into_terminusdb() -> anyhow::Result<()> {
 
                 // Insert schemas first
                 println!("Inserting {} schemas...", schemas.len());
-                match client.insert_schema_instances(schemas, args.clone()).await {
+                match client
+                    .insert_schema_with_context(ctx, schemas, args.clone())
+                    .await
+                {
                     Ok(_) => println!("Schema insertion successful"),
                     Err(e) => println!("Schema insertion error: {:?}", e),
                 }

@@ -116,9 +116,28 @@ fn create_xsd_with_choice(dir: &Path) -> std::path::PathBuf {
     xsd_path
 }
 
+/// The variant names of a type's generated `{Type}Child` union.
+///
+/// A choice's branches become variants of the type's ordered children union,
+/// not optional properties of the class — that is what keeps heterogeneous
+/// children in document order.
+fn child_variants<'a>(
+    schemas: &'a [terminusdb_schema::Schema],
+    type_name: &str,
+) -> Vec<&'a str> {
+    let union_name = format!("{type_name}Child");
+    schemas
+        .iter()
+        .find_map(|s| match s {
+            terminusdb_schema::Schema::TaggedUnion { id, properties, .. } if *id == union_name => {
+                Some(properties.iter().map(|p| p.name.as_str()).collect())
+            }
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
 #[test]
-#[ignore = "xs:choice is not mapped to a TaggedUnion, so the generated schema does not \
-have the variants this validates against. Same crates/xsd gap as choice_tests."]
 fn test_xschoice_schema_generation() {
     // Setup
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -153,25 +172,24 @@ fn test_xschoice_schema_generation() {
         .expect("ContactType should be generated");
 
     if let terminusdb_schema::Schema::Class { properties, .. } = contact_schema {
-        // Should have name, email, and phone properties
+        // The class carries the ordered children list; name and the two choice
+        // branches are variants of ContactTypeChild.
         assert!(
-            properties.iter().any(|p| p.name == "name"),
-            "ContactType should have 'name' property"
+            properties.iter().any(|p| p.name == "children"),
+            "ContactType should carry the ordered children property"
         );
-        assert!(
-            properties.iter().any(|p| p.name == "email"),
-            "ContactType should have 'email' property from choice"
-        );
-        assert!(
-            properties.iter().any(|p| p.name == "phone"),
-            "ContactType should have 'phone' property from choice"
-        );
-
-        // Both choice elements should be optional (since it's a choice, only one is required)
-        // In TerminusDB schema, optional fields have Optional type wrapper
         println!("ContactType properties:");
         for prop in properties {
             println!("  {}: {} (type: {:?})", prop.name, prop.class, prop.r#type);
+        }
+
+        let variants = child_variants(&schemas, "ContactType");
+        println!("ContactTypeChild variants: {variants:?}");
+        for expected in ["name", "email", "phone"] {
+            assert!(
+                variants.contains(&expected),
+                "ContactTypeChild should have the {expected:?} variant, got {variants:?}"
+            );
         }
     } else {
         panic!("ContactType should be a Class schema");
@@ -231,8 +249,11 @@ fn test_xschoice_xml_validation_phone() {
 }
 
 #[test]
-#[ignore = "xs:choice is not mapped to a TaggedUnion, so the generated schema does not \
-have the variants this validates against. Same crates/xsd gap as choice_tests."]
+#[ignore = "xmlschema-rs's validator does not handle xs:choice content models: it \
+rejects a valid branch with \"Unexpected child element 'pushNotification'\" while \
+listing pushNotification among the expected elements in the same message, and it \
+accepts documents that take two branches or none. Both directions are wrong, so the \
+defect is upstream in validate_xml's backend, not in this crate."]
 fn test_xschoice_xml_validation_both_should_fail() {
     // Setup
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -259,8 +280,11 @@ fn test_xschoice_xml_validation_both_should_fail() {
 }
 
 #[test]
-#[ignore = "xs:choice is not mapped to a TaggedUnion, so the generated schema does not \
-have the variants this validates against. Same crates/xsd gap as choice_tests."]
+#[ignore = "xmlschema-rs's validator does not handle xs:choice content models: it \
+rejects a valid branch with \"Unexpected child element 'pushNotification'\" while \
+listing pushNotification among the expected elements in the same message, and it \
+accepts documents that take two branches or none. Both directions are wrong, so the \
+defect is upstream in validate_xml's backend, not in this crate."]
 fn test_xschoice_xml_validation_neither_should_fail() {
     // Setup
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -285,8 +309,11 @@ fn test_xschoice_xml_validation_neither_should_fail() {
 }
 
 #[test]
-#[ignore = "xs:choice is not mapped to a TaggedUnion, so the generated schema does not \
-have the variants this validates against. Same crates/xsd gap as choice_tests."]
+#[ignore = "xmlschema-rs's validator does not handle xs:choice content models: it \
+rejects a valid branch with \"Unexpected child element 'pushNotification'\" while \
+listing pushNotification among the expected elements in the same message, and it \
+accepts documents that take two branches or none. Both directions are wrong, so the \
+defect is upstream in validate_xml's backend, not in this crate."]
 fn test_xschoice_nested_choice_validation() {
     // Setup
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -351,8 +378,11 @@ fn test_xschoice_nested_choice_validation() {
 }
 
 #[test]
-#[ignore = "xs:choice is not mapped to a TaggedUnion, so the generated schema does not \
-have the variants this validates against. Same crates/xsd gap as choice_tests."]
+#[ignore = "xmlschema-rs's validator does not handle xs:choice content models: it \
+rejects a valid branch with \"Unexpected child element 'pushNotification'\" while \
+listing pushNotification among the expected elements in the same message, and it \
+accepts documents that take two branches or none. Both directions are wrong, so the \
+defect is upstream in validate_xml's backend, not in this crate."]
 fn test_xschoice_with_maxoccurs_unbounded() {
     // Setup
     let temp_dir = TempDir::new().expect("Failed to create temp dir");

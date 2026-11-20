@@ -98,6 +98,32 @@ impl XsdToSchemaGenerator {
         // to the base XSD type instead.
         self.simple_type_bases.clear();
         for st in &xsd_schema.simple_types {
+            // A list or union simple type usually has no base_type at all — it
+            // has an item type, or member types. Without an entry here the name
+            // falls through to the "genuine user-defined class" fallback and is
+            // PascalCased into a class that nothing ever emits, which the server
+            // rejects as not_a_class_or_base_type (HL7's set_EntityNamePartQualifier
+            // was the case that surfaced this). Resolve them to a datatype:
+            // the item type for a list, and a string for a union, whose members
+            // cannot collapse into one TDB range.
+            let is_enum_st = st.restrictions.as_ref().is_some_and(|rs| {
+                rs.iter()
+                    .any(|r| matches!(r, crate::schema_model::Restriction::Enumeration { .. }))
+            });
+            if st.base_type.is_none() && !is_enum_st {
+                let resolved = match st.variety {
+                    Some(SimpleTypeVariety::List) => st
+                        .item_type
+                        .clone()
+                        .unwrap_or_else(|| "xs:string".to_string()),
+                    _ => "xs:string".to_string(),
+                };
+                use heck::ToPascalCase;
+                let local = st.name.split('}').last().unwrap_or(&st.name);
+                for key in [st.name.clone(), local.to_string(), local.to_pascal_case()] {
+                    self.simple_type_bases.insert(key, resolved.clone());
+                }
+            }
             if let Some(base) = &st.base_type {
                 // Only map types that have restrictions but are NOT enums
                 // (enums get their own Schema::Enum and the PascalCase reference works)
@@ -363,10 +389,27 @@ impl XsdToSchemaGenerator {
 
         // Populate context prefixes from the XSD's namespace declarations.
         // TDB uses these to resolve prefixed property names (e.g., "xlink:href").
-        let mut prefixes = std::collections::BTreeMap::from([(
-            "xsd".to_string(),
-            "http://www.w3.org/2001/XMLSchema#".to_string(),
-        )]);
+        let mut prefixes = std::collections::BTreeMap::from([
+            (
+                "xsd".to_string(),
+                "http://www.w3.org/2001/XMLSchema#".to_string(),
+            ),
+            // `xml` is bound implicitly in every XML document, so no schema
+            // declares it with an xmlns — yet attributes like `xml:lang` and
+            // `xml:space` use it freely and become prefixed property keys.
+            // Without it in the context the server rejects those keys with
+            // api:UnknownPrefixError.
+            (
+                "xml".to_string(),
+                "http://www.w3.org/XML/1998/namespace#".to_string(),
+            ),
+            // Likewise `xsi` (xsi:type, xsi:nil), conventionally bound but
+            // often left undeclared in the schema document itself.
+            (
+                "xsi".to_string(),
+                "http://www.w3.org/2001/XMLSchema-instance#".to_string(),
+            ),
+        ]);
         for (prefix, uri) in &xsd_schema.namespace_prefixes {
             // Skip the default/target namespace and XSD itself
             if prefix.is_empty() || prefix == "xs" || prefix == "xsd" {
@@ -1118,6 +1161,7 @@ impl XsdToSchemaGenerator {
                 namespace.clone(),
                 child_elements,
                 include_text,
+                simple_types,
             )?;
 
             schemas.push(child_union);
@@ -1609,18 +1653,31 @@ impl XsdToSchemaGenerator {
         namespace: Option<String>,
         child_elements: &[ChildElement],
         include_text_variant: bool,
+        simple_types: &[XsdSimpleType],
     ) -> Result<(Schema, String)> {
         let union_name = format!("{}Child", type_name);
 
         let mut union_properties: Vec<Property> = child_elements
             .iter()
             .filter_map(|element| {
-                let (_, local_name) = self.parse_clark_notation(&element.name);
-                let class = self.map_xsd_type_to_tdb_class(&element.element_type).ok()?;
+                // How often an element may repeat is already carried by the
+                // enclosing `children: List<…>`, so a variant needs no type
+                // family for that — with one exception. An `xs:list`-typed
+                // element holds space-separated values *within a single
+                // element*, which the container cannot express, so that
+                // variant keeps its List family and item class.
+                // `child_element_to_property` resolves both.
+                let prop = self.child_element_to_property(element, simple_types).ok()?;
+                let is_list_value =
+                    self.is_list_simple_type(&element.element_type, simple_types);
                 Some(Property {
-                    name: local_name,
-                    r#type: None,
-                    class,
+                    name: prop.name,
+                    r#type: if is_list_value {
+                        Some(TypeFamily::List)
+                    } else {
+                        None
+                    },
+                    class: prop.class,
                     unfold: false,
                 })
             })

@@ -31,6 +31,33 @@ fn find_property<'a>(props: &'a [Property], name: &str) -> Option<&'a Property> 
     props.iter().find(|p| p.name == name)
 }
 
+/// A child element's variant in the type's generated `{Type}Child` union.
+///
+/// Child elements are variants of that ordered union, not properties of the
+/// class: the class carries one `children: List<{Type}Child>`. The variant keeps
+/// the element's class; how often it may repeat is a property of the enclosing
+/// List, so a variant has no type family — except for an `xs:list`-typed
+/// element, whose value really is a list inside one element.
+fn child_variant<'a>(schemas: &'a [Schema], type_name: &str, element: &str) -> Option<&'a Property> {
+    let union_name = format!("{type_name}Child");
+    schemas.iter().find_map(|s| match s {
+        Schema::TaggedUnion { id, properties, .. } if *id == union_name => {
+            properties.iter().find(|p| p.name == element)
+        }
+        _ => None,
+    })
+}
+
+/// Assert that `type_name` carries the ordered children list.
+fn assert_has_children_list(schemas: &[Schema], type_name: &str) {
+    let class = find_class(schemas, type_name).expect("class not found");
+    let props = get_properties(class).expect("no properties");
+    let children = find_property(props, "children")
+        .unwrap_or_else(|| panic!("{type_name} should carry a children property"));
+    assert_eq!(children.r#type, Some(TypeFamily::List));
+    assert_eq!(children.class, format!("{type_name}Child"));
+}
+
 // ============================================================================
 // Simple Book Schema Tests
 // ============================================================================
@@ -135,10 +162,6 @@ fn test_book_type_has_correct_attributes() {
 }
 
 #[test]
-#[ignore = "the generated class does not carry the element properties this asserts \
-(e.g. 'firstName not found'): local/sequence elements do not become properties. Same \
-crates/xsd generator gap as choice_tests, feature_tests and \
-known_limitations_tests."]
 fn test_book_type_has_correct_child_elements() {
     let xsd_path = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -149,49 +172,29 @@ fn test_book_type_has_correct_child_elements() {
     let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator.generate(&xsd_schema).unwrap();
 
-    let book_type = find_class(&schemas, "BookType").expect("BookType not found");
-    let props = get_properties(book_type).expect("No properties");
+    assert_has_children_list(&schemas, "BookType");
 
-    // Check title element (required, single)
-    // Note: Currently the generator treats all single elements as Optional due to
-    // complexity in analyzing XSD choice/sequence combinations. See schema_generator.rs:982-987
-    let title = find_property(props, "title").expect("title property not found");
+    // The elements keep their classes as variants; repetition (author is
+    // unbounded) is carried by the enclosing children List.
+    let title = child_variant(&schemas, "BookType", "title").expect("title variant not found");
     assert_eq!(title.class, "xsd:string");
-    assert_eq!(
-        title.r#type,
-        Some(TypeFamily::Optional),
-        "Single element is currently treated as Optional"
-    );
+    assert_eq!(title.r#type, None);
 
-    // Check author element (required, unbounded) - should be a Set
-    let author = find_property(props, "author").expect("author property not found");
+    let author = child_variant(&schemas, "BookType", "author").expect("author variant not found");
     assert_eq!(author.class, "PersonType");
-    assert!(
-        matches!(author.r#type, Some(TypeFamily::Set(_))),
-        "Unbounded element should have Set type, got {:?}",
-        author.r#type
-    );
+    assert_eq!(author.r#type, None);
 
-    // Check publisher element (optional, single)
-    let publisher = find_property(props, "publisher").expect("publisher property not found");
+    let publisher =
+        child_variant(&schemas, "BookType", "publisher").expect("publisher variant not found");
     assert_eq!(publisher.class, "xsd:string");
-    assert_eq!(
-        publisher.r#type,
-        Some(TypeFamily::Optional),
-        "Optional element should have Optional type"
-    );
+    assert_eq!(publisher.r#type, None);
 
-    // Check year element (optional, single)
-    let year = find_property(props, "year").expect("year property not found");
+    let year = child_variant(&schemas, "BookType", "year").expect("year variant not found");
     assert_eq!(year.class, "xsd:integer");
-    assert_eq!(year.r#type, Some(TypeFamily::Optional));
+    assert_eq!(year.r#type, None);
 }
 
 #[test]
-#[ignore = "the generated class does not carry the element properties this asserts \
-(e.g. 'firstName not found'): local/sequence elements do not become properties. Same \
-crates/xsd generator gap as choice_tests, feature_tests and \
-known_limitations_tests."]
 fn test_person_type_has_correct_structure() {
     let xsd_path = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -202,23 +205,22 @@ fn test_person_type_has_correct_structure() {
     let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator.generate(&xsd_schema).unwrap();
 
-    let person_type = find_class(&schemas, "PersonType").expect("PersonType not found");
-    let props = get_properties(person_type).expect("No properties");
+    assert_has_children_list(&schemas, "PersonType");
 
     // firstName (required but treated as Optional - see schema_generator.rs:982-987)
-    let first_name = find_property(props, "firstName").expect("firstName not found");
+    let first_name = child_variant(&schemas, "PersonType", "firstName").expect("firstName not found");
     assert_eq!(first_name.class, "xsd:string");
-    assert_eq!(first_name.r#type, Some(TypeFamily::Optional));
+    assert_eq!(first_name.r#type, None);
 
     // lastName (required but treated as Optional)
-    let last_name = find_property(props, "lastName").expect("lastName not found");
+    let last_name = child_variant(&schemas, "PersonType", "lastName").expect("lastName not found");
     assert_eq!(last_name.class, "xsd:string");
-    assert_eq!(last_name.r#type, Some(TypeFamily::Optional));
+    assert_eq!(last_name.r#type, None);
 
     // email (optional)
-    let email = find_property(props, "email").expect("email not found");
+    let email = child_variant(&schemas, "PersonType", "email").expect("email not found");
     assert_eq!(email.class, "xsd:string");
-    assert_eq!(email.r#type, Some(TypeFamily::Optional));
+    assert_eq!(email.r#type, None);
 }
 
 // ============================================================================
@@ -252,10 +254,6 @@ fn test_catalog_schema_generates_all_types() {
 }
 
 #[test]
-#[ignore = "the generated class does not carry the element properties this asserts \
-(e.g. 'firstName not found'): local/sequence elements do not become properties. Same \
-crates/xsd generator gap as choice_tests, feature_tests and \
-known_limitations_tests."]
 fn test_product_type_various_xsd_types() {
     let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/catalog.xsd");
     let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>).unwrap();
@@ -263,43 +261,35 @@ fn test_product_type_various_xsd_types() {
     let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator.generate(&xsd_schema).unwrap();
 
-    let product_type = find_class(&schemas, "ProductType").expect("ProductType not found");
-    let props = get_properties(product_type).expect("No properties");
+    assert_has_children_list(&schemas, "ProductType");
 
     // Check various XSD type mappings
-    let price = find_property(props, "price").expect("price not found");
+    let price = child_variant(&schemas, "ProductType", "price").expect("price not found");
     assert_eq!(
         price.class, "xsd:decimal",
         "xs:decimal should map to xsd:decimal"
     );
 
-    let quantity = find_property(props, "quantity").expect("quantity not found");
+    let quantity = child_variant(&schemas, "ProductType", "quantity").expect("quantity not found");
     assert_eq!(
         quantity.class, "xsd:integer",
         "xs:integer should map to xsd:integer"
     );
 
-    let in_stock = find_property(props, "inStock").expect("inStock not found");
+    let in_stock = child_variant(&schemas, "ProductType", "inStock").expect("inStock not found");
     assert_eq!(
         in_stock.class, "xsd:boolean",
         "xs:boolean should map to xsd:boolean"
     );
 
-    // tags is unbounded string
-    let tags = find_property(props, "tags").expect("tags not found");
+    // tags is an unbounded string element: a variant with no family of its own,
+    // because the enclosing children List already admits any number of them.
+    let tags = child_variant(&schemas, "ProductType", "tags").expect("tags not found");
     assert_eq!(tags.class, "xsd:string");
-    // Since minOccurs=0 and maxOccurs=unbounded, it should be Optional (or Set)
-    assert!(
-        tags.r#type.is_some(),
-        "Unbounded optional element should have a type family"
-    );
+    assert_eq!(tags.r#type, None);
 }
 
 #[test]
-#[ignore = "the generated class does not carry the element properties this asserts \
-(e.g. 'firstName not found'): local/sequence elements do not become properties. Same \
-crates/xsd generator gap as choice_tests, feature_tests and \
-known_limitations_tests."]
 fn test_category_type_self_reference() {
     let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/catalog.xsd");
     let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>).unwrap();
@@ -307,11 +297,10 @@ fn test_category_type_self_reference() {
     let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator.generate(&xsd_schema).unwrap();
 
-    let category_type = find_class(&schemas, "CategoryType").expect("CategoryType not found");
-    let props = get_properties(category_type).expect("No properties");
+    assert_has_children_list(&schemas, "CategoryType");
 
     // subcategory is a self-reference to CategoryType
-    let subcategory = find_property(props, "subcategory").expect("subcategory not found");
+    let subcategory = child_variant(&schemas, "CategoryType", "subcategory").expect("subcategory not found");
     assert_eq!(
         subcategory.class, "CategoryType",
         "Self-referencing type should use PascalCase class name"
@@ -460,10 +449,6 @@ fn test_xsd_model_find_schema() {
 // ============================================================================
 
 #[test]
-#[ignore = "the generated class does not carry the element properties this asserts \
-(e.g. 'firstName not found'): local/sequence elements do not become properties. Same \
-crates/xsd generator gap as choice_tests, feature_tests and \
-known_limitations_tests."]
 fn test_list_types_generate_type_family_list() {
     // Test that xs:list types correctly generate TypeFamily::List.
     //
@@ -499,50 +484,29 @@ fn test_list_types_generate_type_family_list() {
         .generate(&xsd_schema)
         .expect("Failed to generate schemas");
 
-    // Find DataContainer class
-    let data_container =
-        find_class(&schemas, "DataContainer").expect("DataContainer class not found");
-    let props = get_properties(data_container).expect("No properties");
+    assert_has_children_list(&schemas, "DataContainer");
 
-    // scores uses an xs:list type - should have TypeFamily::List
-    let scores = find_property(props, "scores").expect("scores property not found");
+    // `scores` is an xs:list element, so unlike a merely repeating element its
+    // variant keeps TypeFamily::List — the values live inside ONE element and
+    // the enclosing children List cannot express that.
+    let scores =
+        child_variant(&schemas, "DataContainer", "scores").expect("scores variant not found");
     eprintln!(
-        "scores property: class={}, type={:?}",
+        "scores variant: class={}, type={:?}",
         scores.class, scores.r#type
     );
     assert_eq!(
         scores.r#type,
         Some(TypeFamily::List),
-        "xs:list type should generate TypeFamily::List"
+        "an xs:list element should keep TypeFamily::List on its variant"
     );
 
-    // tags uses an optional xs:list type - should have TypeFamily::Optional with List inner
-    let tags = find_property(props, "tags").expect("tags property not found");
-    eprintln!(
-        "tags property: class={}, type={:?}",
-        tags.class, tags.r#type
-    );
-    // Optional list type - since it has minOccurs=0, it's Optional
-    // The underlying type is List but the cardinality makes it Optional
-    assert!(
-        matches!(
-            tags.r#type,
-            Some(TypeFamily::Optional) | Some(TypeFamily::List)
-        ),
-        "Optional xs:list type should be Optional or List. Got {:?}",
-        tags.r#type
-    );
-
-    // items uses maxOccurs="unbounded" - should be Set (NOT List)
-    let items = find_property(props, "items").expect("items property not found");
-    assert!(
-        matches!(
-            items.r#type,
-            Some(TypeFamily::Set(_)) | Some(TypeFamily::Optional)
-        ),
-        "Unbounded elements should use Set or Optional, not List. Got {:?}",
-        items.r#type
-    );
+    // `tags` is an optional xs:list element. Per-element optionality is not
+    // represented (the children List carries multiplicity), so the variant
+    // shows the same List family as a required one.
+    let tags = child_variant(&schemas, "DataContainer", "tags").expect("tags variant not found");
+    eprintln!("tags variant: class={}, type={:?}", tags.class, tags.r#type);
+    assert_eq!(tags.r#type, Some(TypeFamily::List));
 }
 
 // ============================================================================

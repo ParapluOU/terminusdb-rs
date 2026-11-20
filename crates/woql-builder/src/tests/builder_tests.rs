@@ -473,18 +473,25 @@ fn test_when() {
     let test_q = WoqlBuilder::new().eq(vars!("A"), 10u64);
     let then_q = WoqlBuilder::new().triple("doc", "isa", "TypeA");
 
+    // `when` still routes through if_then_else with an empty else, which
+    // desugars to (test AND then) OR (NOT test AND True) — the AST's
+    // conditional (`When { query, consequent }`) has no else branch.
     let final_query = WoqlBuilder::when(test_q, then_q).finalize();
 
     match final_query {
-        Woql2Query::If(if_q) => {
-            // Check test part
-            assert!(matches!(*if_q.test, Woql2Query::Equals(_)));
-            // Check then part
-            assert!(matches!(*if_q.then_query, Woql2Query::Triple(_)));
-            // Check else part is True
-            assert!(matches!(*if_q.else_query, Woql2Query::True(_)));
+        Woql2Query::Or(or_q) => {
+            assert_eq!(or_q.or.len(), 2);
+            match (&or_q.or[0], &or_q.or[1]) {
+                (Woql2Query::And(then_branch), Woql2Query::And(else_branch)) => {
+                    assert!(matches!(then_branch.and[0], Woql2Query::Equals(_)));
+                    assert!(matches!(then_branch.and[1], Woql2Query::Triple(_)));
+                    assert!(matches!(else_branch.and[0], Woql2Query::Not(_)));
+                    assert!(matches!(else_branch.and[1], Woql2Query::True(_)));
+                }
+                other => panic!("Expected two And branches, got {other:?}"),
+            }
         }
-        _ => panic!("Expected If query"),
+        other => panic!("Expected a desugared Or query, got {other:?}"),
     }
 }
 
@@ -496,13 +503,35 @@ fn test_if_then_else() {
 
     let final_query = WoqlBuilder::if_then_else(test_q, then_q, else_q).finalize();
 
+    // (test AND then) OR (NOT test AND else).
     match final_query {
-        Woql2Query::If(if_q) => {
-            assert!(matches!(*if_q.test, Woql2Query::Equals(_)));
-            assert!(matches!(*if_q.then_query, Woql2Query::Triple(_)));
-            assert!(matches!(*if_q.else_query, Woql2Query::Triple(_)));
+        Woql2Query::Or(or_q) => {
+            assert_eq!(or_q.or.len(), 2);
+            match (&or_q.or[0], &or_q.or[1]) {
+                (Woql2Query::And(then_branch), Woql2Query::And(else_branch)) => {
+                    assert!(matches!(then_branch.and[0], Woql2Query::Equals(_)));
+                    assert!(matches!(then_branch.and[1], Woql2Query::Triple(_)));
+                    assert!(matches!(else_branch.and[0], Woql2Query::Not(_)));
+                    assert!(matches!(else_branch.and[1], Woql2Query::Triple(_)));
+                }
+                other => panic!("Expected two And branches, got {other:?}"),
+            }
         }
-        _ => panic!("Expected If query"),
+        other => panic!("Expected a desugared Or query, got {other:?}"),
+    }
+
+    // The direct mapping onto `When` is available as when_then.
+    let when_then = WoqlBuilder::when_then(
+        WoqlBuilder::new().eq(vars!("A"), 10u64),
+        WoqlBuilder::new().triple("doc", "isa", "TypeA"),
+    )
+    .finalize();
+    match when_then {
+        Woql2Query::If(when_q) => {
+            assert!(matches!(*when_q.query, Woql2Query::Equals(_)));
+            assert!(matches!(*when_q.consequent, Woql2Query::Triple(_)));
+        }
+        other => panic!("Expected a When query, got {other:?}"),
     }
 }
 

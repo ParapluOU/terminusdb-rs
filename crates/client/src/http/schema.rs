@@ -196,7 +196,11 @@ impl super::client::TerminusDBHttpClient {
         Ok(())
     }
 
-    /// Inserts a schema context and schemas together into the database.
+    /// Inserts a schema context and schemas into the database.
+    ///
+    /// The context is committed first, on its own, and the schemas follow in a
+    /// second commit — prefixed property keys only resolve against a context
+    /// that is already committed (see the note in the body).
     ///
     /// This is essential for XSD-derived schemas where namespacing prevents conflicts
     /// when multiple schemas have overlapping class names. The Context defines:
@@ -258,20 +262,29 @@ impl super::client::TerminusDBHttpClient {
             schemas.len()
         );
 
-        // Convert to JSON values - context first, then schemas
+        // The context goes in its own commit, BEFORE the schemas.
+        //
+        // The server expands a prefixed key (e.g. `ditaarch:DITAArchVersion`) by
+        // looking the prefix up in the context that is *already committed*
+        // (`context_prefix_expand/3` in src/core/query/jsonld.pl, which throws
+        // key_has_unknown_prefix otherwise). A context sent in the same batch as
+        // the documents that rely on it is not yet visible to that lookup, so
+        // batching them fails with api:UnknownPrefixError even though the prefix
+        // is right there in the payload. Two commits is the only ordering that
+        // works; verified against v12.1.0-rc3.
+        let context_json = context.to_json();
+        self.insert_documents(vec![&context_json], args.clone().as_schema())
+            .await
+            .with_context(|| "inserting schema context")?;
+
         // Use to_namespaced_json() to fully qualify class references in properties
         // and inheritance when a namespace base is present (e.g., XSD-derived schemas).
         // This is necessary because TerminusDB doesn't expand short class names using
         // the Context's @schema - it uses them literally, defaulting to terminusdb:///schema#.
-        let context_json = context.to_json();
         let schema_jsons: Vec<_> = schemas.iter().map(|s| s.to_namespaced_json()).collect();
+        let schema_refs: Vec<&serde_json::Value> = schema_jsons.iter().collect();
 
-        // Combine into a single batch - context must be first
-        let mut all_docs: Vec<&serde_json::Value> = Vec::with_capacity(1 + schemas.len());
-        all_docs.push(&context_json);
-        all_docs.extend(schema_jsons.iter());
-
-        let result = self.insert_documents(all_docs, args.as_schema()).await?;
+        let result = self.insert_documents(schema_refs, args.as_schema()).await?;
 
         debug!(
             "inserted context + {} schemas into TerminusDB",

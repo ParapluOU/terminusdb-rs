@@ -246,6 +246,33 @@ impl<T: Into<Instance>> From<T> for InstanceProperty {
     }
 }
 
+impl InstanceProperty {
+    /// Like `Into<Value>`, but nested instances keep their namespace-qualified
+    /// `@type` (see `Instance::to_namespaced_json`).
+    pub fn to_namespaced_value(&self) -> Value {
+        match self {
+            InstanceProperty::Primitive(p) => p.clone().into(),
+            InstanceProperty::Relation(r) => r.to_namespaced_value(),
+            InstanceProperty::Primitives(arr) => arr
+                .clone()
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<Value>>()
+                .into(),
+            InstanceProperty::Relations(rels) => rels
+                .iter()
+                .map(|r| r.to_namespaced_value())
+                .collect::<Vec<Value>>()
+                .into(),
+            InstanceProperty::Any(objs) => objs
+                .iter()
+                .map(|o| o.to_namespaced_value())
+                .collect::<Vec<Value>>()
+                .into(),
+        }
+    }
+}
+
 impl Into<serde_json::Value> for InstanceProperty {
     fn into(self) -> Value {
         match self {

@@ -35,6 +35,43 @@ fn find_class<'a>(schemas: &'a [Schema], name: &str) -> Option<&'a Schema> {
     })
 }
 
+/// The variant names carried by an instance's ordered `children` list.
+///
+/// Parsed instances mirror the generated schemas: a complex type with child
+/// elements holds `children`, a list of `{Type}Child` tagged-union instances,
+/// each with a single property named after the element it wraps.
+fn child_variant_names(instance: &terminusdb_schema::Instance) -> Vec<String> {
+    match instance.properties.get("children") {
+        Some(terminusdb_schema::InstanceProperty::Relations(children)) => children
+            .iter()
+            .filter_map(|c| match c {
+                terminusdb_schema::RelationValue::One(child) => {
+                    child.properties.keys().next().cloned()
+                }
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The variant names of a complex type's generated children union.
+///
+/// An `xs:choice` is not flattened into one optional property per branch.
+/// Each complex type with child elements gets `children: List<{Type}Child>`,
+/// where `{Type}Child` is a TaggedUnion carrying one variant per permitted
+/// child element — so a choice's branches are that union's variants, which is
+/// what preserves XML document order across heterogeneous children.
+fn children_union_variants<'a>(schemas: &'a [Schema], type_name: &str) -> Vec<&'a str> {
+    let union_name = format!("{type_name}Child");
+    match find_tagged_union(schemas, &union_name) {
+        Some(Schema::TaggedUnion { properties, .. }) => {
+            properties.iter().map(|p| p.name.as_str()).collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// Helper to find a TaggedUnion by name
 fn find_tagged_union<'a>(schemas: &'a [Schema], name: &str) -> Option<&'a Schema> {
     schemas
@@ -104,11 +141,6 @@ fn test_choice_xsd_loads_successfully() {
 }
 
 #[test]
-#[ignore = "xs:choice is not mapped to a TaggedUnion yet: the generator emits a \
-generic `children` property instead of one variant per branch. These four tests \
-document the intended behaviour and fail against the current generator. They only \
-became visible once this crate's test targets compiled again (they were missing \
-dev-dependencies the derive expands to), so they were never green."]
 fn test_choice_generates_tagged_union() {
     let xsd_schema = XsdSchema::from_xsd_file(choice_xsd_path(), None::<&str>)
         .expect("Failed to parse choice_types.xsd");
@@ -145,22 +177,27 @@ fn test_choice_generates_tagged_union() {
     let doc_type = find_class(&schemas, "DocumentType").expect("DocumentType not found");
 
     if let Schema::Class { properties, .. } = doc_type {
-        // Should have title, footer, id, and a choice property
         let prop_names: Vec<&str> = properties.iter().map(|p| p.name.as_str()).collect();
         eprintln!("\nDocumentType properties: {:?}", prop_names);
 
-        // The choice elements should be represented somehow
-        // Either as separate optional properties or as a union type
-        let has_article = prop_names.contains(&"article");
-        let has_report = prop_names.contains(&"report");
-        let has_memo = prop_names.contains(&"memo");
-
-        // At least one representation of choice should exist
+        // The choice is represented as a union, the second of the two shapes
+        // this test has always allowed: DocumentType carries one ordered
+        // `children` property typed as the DocumentTypeChild TaggedUnion.
         assert!(
-            has_article || has_report || has_memo,
-            "Choice elements not found in DocumentType. Properties: {:?}",
+            prop_names.contains(&"children"),
+            "DocumentType should carry the ordered children property, got {:?}",
             prop_names
         );
+
+        let variants = children_union_variants(&schemas, "DocumentType");
+        eprintln!("DocumentTypeChild variants: {:?}", variants);
+        for branch in ["article", "report", "memo"] {
+            assert!(
+                variants.contains(&branch),
+                "choice branch {branch:?} missing from DocumentTypeChild: {:?}",
+                variants
+            );
+        }
     }
 }
 
@@ -225,11 +262,6 @@ fn test_repeating_choice_generates_set() {
 }
 
 #[test]
-#[ignore = "xs:choice is not mapped to a TaggedUnion yet: the generator emits a \
-generic `children` property instead of one variant per branch. These four tests \
-document the intended behaviour and fail against the current generator. They only \
-became visible once this crate's test targets compiled again (they were missing \
-dev-dependencies the derive expands to), so they were never green."]
 fn test_payment_type_has_payment_method_choice() {
     let xsd_schema = XsdSchema::from_xsd_file(choice_xsd_path(), None::<&str>)
         .expect("Failed to parse choice_types.xsd");
@@ -245,19 +277,33 @@ fn test_payment_type_has_payment_method_choice() {
         let prop_names: Vec<&str> = properties.iter().map(|p| p.name.as_str()).collect();
         eprintln!("\nPaymentType properties: {:?}", prop_names);
 
-        // Should have amount, currency, and payment method choice options
-        assert!(prop_names.contains(&"amount"), "amount not found");
-        assert!(prop_names.contains(&"currency"), "currency not found");
+        // amount/currency and the payment-method choice are all child elements,
+        // so they are variants of PaymentTypeChild rather than properties of
+        // PaymentType itself (which carries the ordered `children` list).
+        assert!(
+            prop_names.contains(&"children"),
+            "PaymentType should carry the ordered children property, got {:?}",
+            prop_names
+        );
 
-        // Check for payment method choice elements
-        let has_credit_card = prop_names.contains(&"creditCard");
-        let has_bank_transfer = prop_names.contains(&"bankTransfer");
-        let has_digital_wallet = prop_names.contains(&"digitalWallet");
+        let variants = children_union_variants(&schemas, "PaymentType");
+        eprintln!("PaymentTypeChild variants: {:?}", variants);
+        for required in ["amount", "currency"] {
+            assert!(
+                variants.contains(&required),
+                "{required:?} missing from PaymentTypeChild: {:?}",
+                variants
+            );
+        }
+
+        let has_credit_card = variants.contains(&"creditCard");
+        let has_bank_transfer = variants.contains(&"bankTransfer");
+        let has_digital_wallet = variants.contains(&"digitalWallet");
 
         assert!(
             has_credit_card || has_bank_transfer || has_digital_wallet,
-            "Payment method choice not found. Properties: {:?}",
-            prop_names
+            "Payment method choice not found in PaymentTypeChild: {:?}",
+            variants
         );
     }
 }
@@ -300,11 +346,15 @@ fn test_parse_document_with_article_choice() {
                 "Should parse to at least one instance"
             );
 
-            // Check the structure has article
+            // The choice branch shows up as a variant inside the ordered
+            // children list, not as a flat property on the document.
             let first = &instances[0];
+            let variants = child_variant_names(first);
+            eprintln!("child variants: {:?}", variants);
             assert!(
-                first.has_property("article") || first.has_property("title"),
-                "Instance should have article or title property"
+                variants.iter().any(|v| v == "article" || v == "title"),
+                "children should carry an article or title variant, got {:?}",
+                variants
             );
         }
         Err(e) => {
@@ -512,11 +562,6 @@ fn test_parse_contact_with_optional_choice() {
 // ============================================================================
 
 #[tokio::test]
-#[ignore = "xs:choice is not mapped to a TaggedUnion yet: the generator emits a \
-generic `children` property instead of one variant per branch. These four tests \
-document the intended behaviour and fail against the current generator. They only \
-became visible once this crate's test targets compiled again (they were missing \
-dev-dependencies the derive expands to), so they were never green."]
 async fn test_choice_full_flow_document_with_article() -> anyhow::Result<()> {
     let model =
         XsdModel::from_file(choice_xsd_path(), None::<&str>).expect("Failed to load XSD model");
@@ -575,11 +620,6 @@ async fn test_choice_full_flow_document_with_article() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "xs:choice is not mapped to a TaggedUnion yet: the generator emits a \
-generic `children` property instead of one variant per branch. These four tests \
-document the intended behaviour and fail against the current generator. They only \
-became visible once this crate's test targets compiled again (they were missing \
-dev-dependencies the derive expands to), so they were never green."]
 async fn test_choice_full_flow_payment_methods() -> anyhow::Result<()> {
     let model =
         XsdModel::from_file(choice_xsd_path(), None::<&str>).expect("Failed to load XSD model");
