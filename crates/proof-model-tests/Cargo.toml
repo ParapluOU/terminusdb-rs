@@ -27,7 +27,9 @@ terminusdb-schema = { path = "../schema" }
 # The same git dependency on the fork's proof branch that woql-proof declares,
 # so both resolve to one source identity (and one package, under a workspace
 # that patches it to a local checkout).
-terminus-store = { git = "https://github.com/ParapluOU/terminusdb-store", branch = "parture-proof-of-woql" }
+# `proof` is opt-in in the store fork, so a consumer that only reads triples
+# compiles none of the Dory/Arkworks stack. This crate is the other kind.
+terminus-store = { git = "https://github.com/ParapluOU/terminusdb-store", branch = "parture-proof-of-woql", features = ["proof"] }
 
 [dev-dependencies]
 # Seeded, reproducible PRNG for the phase-3 generative differential fuzzer.

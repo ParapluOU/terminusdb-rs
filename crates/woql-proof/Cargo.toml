@@ -39,7 +39,9 @@ thiserror = { workspace = true }
 # and there is one Cargo source identity for terminus-store.
 dory-pcs = { version = "0.4.2", git = "https://github.com/ParapluOU/dory", branch = "main", default-features = false, features = ["arkworks", "parallel"] }
 tdb-succinct = { version = "0.2" }
-terminus-store = { git = "https://github.com/ParapluOU/terminusdb-store", branch = "parture-proof-of-woql" }
+# `proof` is opt-in in the store fork, so a consumer that only reads triples
+# compiles none of the Dory/Arkworks stack. This crate is the other kind.
+terminus-store = { git = "https://github.com/ParapluOU/terminusdb-store", branch = "parture-proof-of-woql", features = ["proof"] }
 
 # Exact PURE-RUST big rationals for the xsd:decimal/rational value layer (GMP-free so
 # the compiler stays cross-compilable / WASM-friendly).

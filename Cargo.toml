@@ -114,11 +114,19 @@ codegen-units = 1
 # Pins matched to terminusdb-community @ v12.1.0-rc3-paraplu.1 (fork rebased on
 # upstream v12.1.0-rc3). Keep in lockstep with crates/gql's terminusdb-community
 # rev.
-# NB: source spec must match the community crate's own spec EXACTLY, or cargo
-# resolves two distinct terminus-store copies and the GrpcLabelStore ->
-# LabelStore trait impl no longer unifies. v12.1.0-rc3 pins `tag="v0.23.1"`
-# (was an untagged git ref on 12.1-rc).
-terminus-store = { git = "https://github.com/terminusdb-org/terminusdb-store", tag = "v0.23.1" }
+# One store lineage, reached by both routes. Our fork (version 0.23.1 on
+# purpose, so this patch is semver-accepted) is a superset of upstream
+# v0.23.1; the proving stack inside it is behind its opt-in `proof` feature, so
+# a crate that only reads and writes triples compiles none of it.
+#
+# TWO patch tables are needed and neither is redundant: this one covers a
+# crates-io `terminus-store` requirement, and the source patch below covers the
+# direct git requirement that terminusdb-store-prolog and the grpc label-store
+# client both declare. Patching per dependency instead leaves one of them on
+# terminusdb-org, and then `GrpcLabelStore` implements THAT copy's `LabelStore`
+# and stops satisfying ours — the failure is a trait bound, not a version
+# conflict, so it reads like a code error rather than a resolution one.
+terminus-store = { git = "https://github.com/ParapluOU/terminusdb-store", branch = "parture-proof-of-woql" }
 # Use pure Rust rug shim for cross-compilation (replaces GMP-based rug)
 rug = { path = "crates/rug-shim" }
 # swipl-rs as pinned by v12.1.0-rc3 (terminusdb-org).
@@ -131,3 +139,11 @@ swipl-fli = { git = "https://github.com/terminusdb-org/swipl-rs", rev = "2fdd55e
 # 0.2 line is not published, so this patch is also the only way the proof
 # crates' and the store fork's `tdb-succinct = "0.2"` requirements resolve.
 tdb-succinct = { git = "https://github.com/terminusdb-org/tdb-succinct", tag = "v0.2.1" }
+
+# The other route to the store: terminusdb-store-prolog (reached through
+# terminusdb-community) and terminusdb-grpc-labelstore-client both ask for
+# terminusdb-org/terminusdb-store by git URL. Redirecting the SOURCE catches
+# both, including the grpc client, whose manifest lives in a repository we do
+# not control and therefore cannot edit.
+[patch."https://github.com/terminusdb-org/terminusdb-store"]
+terminus-store = { git = "https://github.com/ParapluOU/terminusdb-store", branch = "parture-proof-of-woql" }
