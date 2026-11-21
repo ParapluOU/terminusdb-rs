@@ -51,17 +51,71 @@ use crate::ids::{ClassName, DocId, Namespace};
 use terminusdb_client::{CommitId, GetOpts, LogOpts, TerminusDBHttpClient};
 
 /// Resolves commits against a live TerminusDB node.
+/// The upstream clients, one per organization.
+///
+/// `BranchSpec` carries no organization — the client holds it, as
+/// [`Namespace::to_branch_spec`](crate::ids::Namespace::to_branch_spec) says
+/// outright — so every call *about* a namespace has to go through a client
+/// configured with **that namespace's** org. One Reactor fronts one node, but a
+/// node has as many organizations as its application has tenants, so a single
+/// client built from `[upstream].org` cannot serve them: capture used to poll
+/// every namespace's head as `/api/log/<upstream org>/<db>/…` whatever the
+/// namespace said, so a namespace outside that one organization never got a
+/// watermark and nothing in it was ever cached (and a same-named database in the
+/// configured org would have answered for it).
+///
+/// Kept per org rather than cloned per call because
+/// [`TerminusDBHttpClient::for_org`] clears the clone's ensured-databases cache,
+/// so cloning per request would throw that away every time.
+#[derive(Debug)]
+pub struct Clients {
+    /// The client as configured, for calls that are about no namespace.
+    base: Arc<TerminusDBHttpClient>,
+    by_org: dashmap::DashMap<String, Arc<TerminusDBHttpClient>>,
+}
+
+impl Clients {
+    /// Wrap the configured client.
+    pub fn new(base: Arc<TerminusDBHttpClient>) -> Self {
+        Self {
+            base,
+            by_org: dashmap::DashMap::new(),
+        }
+    }
+
+    /// The client for calls about `ns`.
+    pub fn for_ns(&self, ns: &Namespace) -> Arc<TerminusDBHttpClient> {
+        if ns.org == self.base.org() {
+            return Arc::clone(&self.base);
+        }
+        if let Some(found) = self.by_org.get(&ns.org) {
+            return Arc::clone(found.value());
+        }
+        let scoped = Arc::new(self.base.for_org(&ns.org));
+        self.by_org
+            .entry(ns.org.clone())
+            .or_insert(scoped)
+            .value()
+            .clone()
+    }
+
+    /// The client as configured.
+    pub fn base(&self) -> &Arc<TerminusDBHttpClient> {
+        &self.base
+    }
+}
+
 pub struct TerminusResolver {
-    client: Arc<TerminusDBHttpClient>,
+    clients: Arc<Clients>,
     /// Above this many touched documents, stop reading and fire coarse terms.
     diff_threshold: usize,
 }
 
 impl TerminusResolver {
     /// Build a resolver.
-    pub fn new(client: Arc<TerminusDBHttpClient>, diff_threshold: usize) -> Self {
+    pub fn new(clients: Arc<Clients>, diff_threshold: usize) -> Self {
         Self {
-            client,
+            clients,
             diff_threshold,
         }
     }
@@ -78,7 +132,7 @@ impl TerminusResolver {
         id: &str,
     ) -> anyhow::Result<Option<serde_json::Value>> {
         let spec = ns.to_commit_spec(commit);
-        self.client
+        self.clients.for_ns(ns)
             .get_document_if_exists(id, &spec, GetOpts::default())
             .await
     }
@@ -90,7 +144,8 @@ impl TerminusResolver {
     /// the gap this leaves.
     async fn schema_changed(&self, ns: &Namespace, commit: &CommitId, touched: &[&String]) -> bool {
         let migration = match self
-            .client
+            .clients
+            .for_ns(ns)
             .log(
                 &ns.to_commit_spec(commit),
                 LogOpts {
@@ -149,7 +204,8 @@ impl ChangeResolver for TerminusResolver {
         parent: Option<&CommitId>,
     ) -> anyhow::Result<ChangeSet> {
         let changes = self
-            .client
+            .clients
+            .for_ns(ns)
             .get_changes(&ns.to_commit_spec(commit), None)
             .await?;
 
@@ -320,20 +376,20 @@ fn doc_change(
 /// node really has it. The resolver needs the same call anyway, so the gate adds
 /// one tiny request rather than a whole read path.
 pub struct PinnedReadGate {
-    client: Arc<TerminusDBHttpClient>,
+    clients: Arc<Clients>,
 }
 
 impl PinnedReadGate {
     /// Build a gate.
-    pub fn new(client: Arc<TerminusDBHttpClient>) -> Self {
-        Self { client }
+    pub fn new(clients: Arc<Clients>) -> Self {
+        Self { clients }
     }
 }
 
 #[async_trait]
 impl ReadinessGate for PinnedReadGate {
     async fn await_readable(&self, ns: &Namespace, commit: &CommitId) -> anyhow::Result<()> {
-        self.client
+        self.clients.for_ns(ns)
             .get_changes(&ns.to_commit_spec(commit), Some(0))
             .await?;
         Ok(())
@@ -342,13 +398,13 @@ impl ReadinessGate for PinnedReadGate {
 
 /// Commit history from `/api/log`.
 pub struct TerminusHistory {
-    client: Arc<TerminusDBHttpClient>,
+    clients: Arc<Clients>,
 }
 
 impl TerminusHistory {
     /// Build a history reader.
-    pub fn new(client: Arc<TerminusDBHttpClient>) -> Self {
-        Self { client }
+    pub fn new(clients: Arc<Clients>) -> Self {
+        Self { clients }
     }
 }
 
@@ -356,7 +412,8 @@ impl TerminusHistory {
 impl CommitHistory for TerminusHistory {
     async fn recent(&self, ns: &Namespace, count: usize) -> anyhow::Result<Vec<LogCommit>> {
         let entries = self
-            .client
+            .clients
+            .for_ns(ns)
             .log(
                 &ns.to_branch_spec(),
                 LogOpts {

@@ -18,7 +18,7 @@
 
 pub mod difflog;
 pub mod headpoll;
-mod resolve;
+pub mod resolve;
 pub mod subscription;
 
 pub use difflog::DiffLog;
@@ -937,7 +937,10 @@ pub enum CaptureHint {
 /// namespace's node trouble cannot stall another's.
 pub struct Supervisor {
     engine: Arc<Engine>,
-    client: Arc<terminusdb_client::TerminusDBHttpClient>,
+    /// The upstream clients, one per organization: a call about a namespace must
+    /// carry that namespace's org, because `BranchSpec` does not. See
+    /// [`resolve::Clients`].
+    clients: Arc<resolve::Clients>,
     /// Plain HTTP for surfaces the typed client does not model — currently the
     /// diff-log feed, which is a GraphQL endpoint at a path of its own. Built
     /// once: a `reqwest::Client` is a connection pool, and the stream-rebuild
@@ -962,7 +965,7 @@ impl Supervisor {
     ) -> Self {
         Self {
             engine,
-            client,
+            clients: Arc::new(resolve::Clients::new(client)),
             http: reqwest::Client::new(),
             config,
             running: dashmap::DashSet::new(),
@@ -994,11 +997,11 @@ impl Supervisor {
         Applier::new(
             Arc::clone(&self.engine),
             Arc::new(TerminusResolver::new(
-                Arc::clone(&self.client),
+                Arc::clone(&self.clients),
                 self.config.capture.diff_threshold,
             )),
-            Arc::new(PinnedReadGate::new(Arc::clone(&self.client))),
-            Arc::new(TerminusHistory::new(Arc::clone(&self.client))),
+            Arc::new(PinnedReadGate::new(Arc::clone(&self.clients))),
+            Arc::new(TerminusHistory::new(Arc::clone(&self.clients))),
             self.config.capture.max_gap_walk,
         )
     }
@@ -1008,7 +1011,7 @@ impl Supervisor {
     /// Failure is logged and tolerated: an empty or stale index makes analyzers
     /// emit coarse terms, which costs hit rate rather than correctness.
     pub async fn refresh_schema(&self, ns: &Namespace) {
-        match self.client.get_schema_documents(&ns.to_branch_spec()).await {
+        match self.clients.for_ns(ns).get_schema_documents(&ns.to_branch_spec()).await {
             Ok(docs) => match crate::schema_index::SchemaIndex::from_schema_documents(&docs) {
                 Ok(index) => {
                     let classes = index.classes().count();
@@ -1086,7 +1089,7 @@ impl Supervisor {
                 CaptureHint::Commit { ns, commit } => (ns, CommitEvent::new(commit)),
                 CaptureHint::Resync { ns } => {
                     // We do not know the new head; ask the node.
-                    match self.client.get_latest_commit_id(&ns.to_branch_spec()).await {
+                    match self.clients.for_ns(&ns).get_latest_commit_id(&ns.to_branch_spec()).await {
                         Ok(head) => (ns, CommitEvent::new(head)),
                         Err(err) => {
                             tracing::warn!(%ns, error = %err, "resync could not read the head");
@@ -1113,7 +1116,7 @@ impl Supervisor {
         // cannot be served from cache at all — there is no position to pin a
         // fill at — so keep trying.
         loop {
-            match self.client.get_latest_commit_id(&ns.to_branch_spec()).await {
+            match self.clients.for_ns(&ns).get_latest_commit_id(&ns.to_branch_spec()).await {
                 Ok(head) => match applier.apply(&ns, &CommitEvent::new(head)).await {
                     Ok(outcome) => {
                         tracing::info!(%ns, ?outcome, "capture started");
@@ -1198,7 +1201,7 @@ impl Supervisor {
                 let supervisor = Arc::clone(&self);
                 let polled = ns.clone();
                 let poll = headpoll::HeadPoll::with_interval(
-                    Arc::clone(&self.client),
+                    self.clients.for_ns(&ns),
                     Arc::new(move || supervisor.poll_interval(&polled)),
                 );
                 sources.push(poll.subscribe(&ns, after.clone()));
@@ -1232,7 +1235,7 @@ impl Supervisor {
             }
             if want_subscription {
                 let sub = subscription::ChangeSetSubscription::new(
-                    Arc::clone(&self.client),
+                    self.clients.for_ns(&ns),
                     self.engine.schema(&ns),
                 );
                 sources.push(sub.subscribe(&ns, after));
