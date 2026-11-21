@@ -170,64 +170,85 @@ pub struct Record {
     pub commit: String,
 }
 
-/// Why a feed probe said no.
+/// Whether the upstream carries an extension we want.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Availability {
-    /// The feed answered. Use it.
+    /// The server says it has it. Use it.
     Present,
-    /// The server does not carry the feed — a 404, or a schema without the
-    /// field. Permanent for this server, so fall back rather than back off.
+    /// The server says it does not. Permanent for this server, so fall back to
+    /// a weaker driver rather than back off forever.
     Absent,
-    /// Something else: unreachable, unauthorized, a transient 5xx. The feed may
-    /// well be there, so backing off and retrying is right and demoting to a
-    /// weaker driver would be giving up on evidence we do not have.
+    /// We could not ask: unreachable, unauthorized, a payload we did not
+    /// understand. The extension may well be there, so retrying is right —
+    /// demoting on this would be giving up on evidence we do not have.
     Unknown,
 }
 
 impl DiffLog {
-    /// Ask whether this server carries the feed, in one request.
+    /// Ask `/api/info` whether this server carries the diff log.
     ///
-    /// Called before a stream is built rather than inferred from failures,
-    /// because the two cases need opposite responses: an absent feed should
-    /// fall back to polling immediately and permanently, while an unreachable
-    /// node should keep retrying. Guessing from a failed poll conflates them,
-    /// and guessing wrong in the pessimistic direction is what turns a cache
-    /// silently stale.
-    pub async fn availability(&self, ns: &Namespace) -> Availability {
-        let endpoint = match self.endpoint(ns) {
+    /// Asked of the server rather than inferred from a failed request, and
+    /// asked once per server rather than once per namespace. `/api/info`
+    /// reports a `distribution` and a list of `extensions`, and the capability
+    /// check is against the latter: a distribution name says who built the
+    /// server, not what it can do, so an older `paraplu` build answers
+    /// `paraplu` while lacking this surface. Branching on the name would mean
+    /// keeping a distribution-to-version-to-feature table that goes stale in
+    /// silence.
+    ///
+    /// Three outcomes rather than two, because `Absent` and `Unknown` want
+    /// opposite responses: a server that does not have the feed should fall
+    /// back to polling now and permanently, while a server we cannot reach
+    /// should be retried. Conflating them either downgrades a capable server
+    /// after one blip, or leaves capture backing off forever against a node
+    /// that will never answer — and that second one is a silently stale cache.
+    pub async fn availability(&self) -> Availability {
+        let endpoint = match self.upstream.join("/api/info") {
             Ok(endpoint) => endpoint,
             Err(_) => return Availability::Unknown,
         };
         let response = self
             .http
-            .post(endpoint)
+            .get(endpoint)
             .basic_auth(&self.user, Some(&self.pass))
-            .json(&serde_json::json!({ "query": "{ __typename }" }))
             .send()
             .await;
         let Ok(response) = response else {
             return Availability::Unknown;
         };
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Availability::Absent;
-        }
         if !response.status().is_success() {
             return Availability::Unknown;
         }
         let Ok(text) = response.text().await else {
             return Availability::Unknown;
         };
-        // A server whose GraphQL does not know the field answers 200 with an
-        // errors array, so the status alone does not settle it.
-        if text.contains("Cannot query field")
-            || text.contains("Unknown field")
-            || text.contains("Unknown type")
+        let Ok(body) = serde_json::from_str::<serde_json::Value>(&text) else {
+            return Availability::Unknown;
+        };
+        // An upstream old enough to predate extension reporting says nothing
+        // about them, which is not the same as reporting none: it cannot be
+        // asked, so it is Unknown and the driver falls back through its own
+        // failures instead of being told to.
+        let Some(extensions) = body
+            .get("api:info")
+            .and_then(|info| info.get("extensions"))
+            .and_then(|extensions| extensions.as_array())
+        else {
+            return Availability::Unknown;
+        };
+        if extensions
+            .iter()
+            .any(|extension| extension.as_str() == Some(EXTENSION))
         {
-            return Availability::Absent;
+            Availability::Present
+        } else {
+            Availability::Absent
         }
-        Availability::Present
     }
 }
+
+/// The name this driver's surface reports itself under in `/api/info`.
+const EXTENSION: &str = "difflog";
 
 impl CommitSource for DiffLog {
     fn name(&self) -> &'static str {
@@ -445,9 +466,45 @@ mod tests {
     async fn an_unreachable_node_is_unknown_rather_than_absent() {
         // The distinction is load-bearing: Absent falls back to polling for
         // good, Unknown keeps retrying. Treating a down node as Absent would
-        // permanently downgrade a capable server.
+        // permanently downgrade a capable server after one blip.
         let feed = feed(Duration::from_millis(1));
-        assert_eq!(Availability::Unknown, feed.availability(&ns()).await);
+        assert_eq!(Availability::Unknown, feed.availability().await);
+    }
+
+    #[test]
+    fn capability_comes_from_the_extension_list_not_the_distribution_name() {
+        // An older paraplu build answers `paraplu` and does NOT carry the
+        // feed, so the name cannot be the check.
+        let reads = |body: serde_json::Value| -> Option<bool> {
+            let extensions = body
+                .get("api:info")?
+                .get("extensions")?
+                .as_array()?
+                .iter()
+                .any(|extension| extension.as_str() == Some(EXTENSION));
+            Some(extensions)
+        };
+        assert_eq!(
+            Some(true),
+            reads(serde_json::json!({"api:info": {
+                "distribution": "paraplu",
+                "extensions": ["difflog", "commit_hooks"]
+            }}))
+        );
+        assert_eq!(
+            Some(false),
+            reads(serde_json::json!({"api:info": {
+                "distribution": "paraplu",
+                "extensions": ["commit_hooks"]
+            }}))
+        );
+        // An upstream that reports no extensions key at all cannot be asked,
+        // which is Unknown rather than Absent — tested here as the absence of
+        // an answer.
+        assert_eq!(
+            None,
+            reads(serde_json::json!({"api:info": {"distribution": "terminusdb"}}))
+        );
     }
 
     #[test]

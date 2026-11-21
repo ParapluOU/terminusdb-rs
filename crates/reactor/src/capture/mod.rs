@@ -1179,11 +1179,14 @@ impl Supervisor {
                     &self.config.upstream.pass,
                     Arc::new(|| std::time::Duration::from_millis(1)),
                 );
-                if probe.availability(&ns).await == difflog::Availability::Absent {
+                // One question per stream build, about the server rather than
+                // this namespace: /api/info reports the extensions a build
+                // carries, so the answer is the same for every namespace on it.
+                if probe.availability().await == difflog::Availability::Absent {
                     feed_fallback = true;
                     tracing::warn!(
                         %ns,
-                        "this server does not carry /api/graphql/_difflog; falling back to head                          polling. Capture still works, but every event costs a log walk and                          /api/log is O(depth) — upgrade the server to get the feed."
+                        "this server's /api/info does not list the `difflog` extension; falling back to head polling. Capture still works, but every event costs a log walk and /api/log is O(depth) — a paraplu build carrying the feed removes both."
                     );
                 }
             }

@@ -7889,7 +7889,7 @@ dependencies = [
 [[package]]
 name = "terminusdb-community"
 version = "0.1.0"
-source = "git+https://github.com/ParapluOU/terminusdb.git?rev=6e47baf5f2ed2be5d355ae65be1a3b7dd9b8672e#6e47baf5f2ed2be5d355ae65be1a3b7dd9b8672e"
+source = "git+https://github.com/ParapluOU/terminusdb.git?rev=0599fb25919801f0b6e90f2a06fd9cc4336eb9f4#0599fb25919801f0b6e90f2a06fd9cc4336eb9f4"
 dependencies = [
  "aho-corasick 0.7.20",
  "axum 0.8.9",
@@ -8268,7 +8268,7 @@ dependencies = [
 [[package]]
 name = "terminusdb-store-prolog"
 version = "0.2.0"
-source = "git+https://github.com/ParapluOU/terminusdb.git?rev=6e47baf5f2ed2be5d355ae65be1a3b7dd9b8672e#6e47baf5f2ed2be5d355ae65be1a3b7dd9b8672e"
+source = "git+https://github.com/ParapluOU/terminusdb.git?rev=0599fb25919801f0b6e90f2a06fd9cc4336eb9f4#0599fb25919801f0b6e90f2a06fd9cc4336eb9f4"
 dependencies = [
  "base64 0.13.1",
  "chardetng",
@@ -8331,7 +8331,7 @@ dependencies = [
 [[package]]
 name = "terminusdb-webserver"
 version = "0.1.0"
-source = "git+https://github.com/ParapluOU/terminusdb.git?rev=6e47baf5f2ed2be5d355ae65be1a3b7dd9b8672e#6e47baf5f2ed2be5d355ae65be1a3b7dd9b8672e"
+source = "git+https://github.com/ParapluOU/terminusdb.git?rev=0599fb25919801f0b6e90f2a06fd9cc4336eb9f4#0599fb25919801f0b6e90f2a06fd9cc4336eb9f4"
 dependencies = [
  "axum 0.8.9",
  "flate2",
