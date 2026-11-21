@@ -7,8 +7,11 @@
 //! must not become an access-control bypass.** Without this gate, anyone who
 //! could reach the proxy could read any namespace another user had warmed.
 //!
-//! The check is a capability probe — `GET /api/db/<org>/<db>` with the
-//! *client's* `Authorization` — memoized briefly.
+//! The check is a capability probe — a one-document schema read of the database
+//! with the *client's* `Authorization` — memoized briefly. It probes the
+//! resource itself rather than a description of it, so that "may read" is
+//! established by doing the smallest possible version of the thing, not inferred
+//! from another endpoint's permissions.
 //!
 //! Two asymmetries are deliberate:
 //!
@@ -117,8 +120,23 @@ impl AuthGate {
         if self.memoized(auth, ns) {
             return AuthDecision::Allowed;
         }
+        // The probe is the weakest form of the very thing it authorizes: a
+        // one-document schema read of the database, with the caller's own
+        // credentials. If that succeeds the caller can read this database, which
+        // is exactly the capability a hit would be exercising — no inference from
+        // one endpoint's permissions to another's.
+        //
+        // It used to be `GET /api/db/<org>/<db>`, which v12 answers **404 for a
+        // database outside the server's own organization** even when the caller
+        // can read it and `GET /api/db/<org>` lists it. A non-success is
+        // `Unknown`, so every namespace of an application that gives each tenant
+        // an organization of its own bypassed for ever, and the cache did nothing
+        // at all. Measured against v12.1.0-rc3: `/api/db/default/publishing` 404,
+        // `/api/document/default/publishing?graph_type=schema&count=1` 200, and
+        // 404 for a database that does not exist — so it still tells a missing
+        // database from a readable one.
         let url = format!(
-            "{}/api/db/{}/{}",
+            "{}/api/document/{}/{}?graph_type=schema&count=1",
             self.upstream.as_str().trim_end_matches('/'),
             ns.org,
             ns.db
