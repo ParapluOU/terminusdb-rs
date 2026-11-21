@@ -289,9 +289,9 @@ pub enum Driver {
     Poll,
     /// `_ChangeSet` over SSE. Low latency; needs a local commit path.
     Subscription,
-    /// Subscription for latency, poll as the liveness backstop. The default,
-    /// and the right answer when unsure.
-    #[default]
+    /// Subscription for latency, poll as the liveness backstop. What to reach
+    /// for when the server predates the diff log and low latency matters more
+    /// than the log walk each event costs.
     Both,
     /// Read the server's per-commit diff log
     /// (`/api/graphql/_difflog/<org>/<db>`).
@@ -305,9 +305,18 @@ pub enum Driver {
     /// History rewrites arrive as a reported discontinuity rather than a head
     /// that mysteriously went backwards.
     ///
-    /// Requires a server carrying the feed; against an older node every poll
-    /// fails and backs off, which is why this is opt-in rather than the
-    /// default.
+    /// The default. A server that does not carry the feed is found out by an
+    /// explicit probe — a 404, or a GraphQL schema without the field — and
+    /// falls back to head polling with a warning, so an older node degrades to
+    /// the previous behaviour rather than to silence. That fallback is the only
+    /// reason this can be a default: a driver whose failure mode is a quiet
+    /// cache has no business being one.
+    ///
+    /// Cheaper than `both`, not dearer. Capture already runs one task per
+    /// namespace; this replaces the poll inside it and brings no subscription
+    /// alongside, so it also spends no SSE slot.
+    #[default]
+    #[serde(alias = "difflog")]
     DiffLog,
 }
 
@@ -402,7 +411,7 @@ impl Default for CaptureConfig {
     fn default() -> Self {
         Self {
             driver: Driver::Both,
-            dynamic_driver: Driver::Poll,
+            dynamic_driver: Driver::DiffLog,
             auto_register: false,
             max_tracked_namespaces: 512,
             poll_interval_ms: 150,
@@ -801,7 +810,13 @@ mod tests {
             MinVersionPolicy::Wait
         );
         assert_eq!(config.consistency.write_fence_ms, 2000);
-        assert_eq!(config.capture.driver, Driver::Both);
+        assert_eq!(
+            config.capture.driver,
+            Driver::DiffLog,
+            "the example ships the default, and `diff-log` must be the spelling that parses — \
+             kebab-case renders the variant with a hyphen, so an example saying `difflog` would \
+             have shipped a configuration file nobody could load"
+        );
         assert_eq!(config.capture.poll_interval_ms, 150);
         assert_eq!(config.capture.diff_threshold, 2000);
         assert_eq!(config.capture.max_gap_walk, 500);
@@ -914,10 +929,11 @@ mod tests {
         );
         assert_eq!(
             config.driver_for(&Namespace::new("admin", "registered", "main")),
-            Driver::Poll,
+            Driver::DiffLog,
             "a namespace with no [[namespace]] entry was registered at run time, and gets \
-             [capture].dynamic_driver — poll, because a _ChangeSet cohort covers one database \
-             and the per-user SSE cap does not survive a database per tenant"
+             [capture].dynamic_driver — the diff log, which suits a database per tenant for the \
+             same reason poll did (no _ChangeSet cohort, so no per-user SSE cap to exhaust) \
+             while costing one O(1) request per idle namespace instead of a head walk"
         );
     }
 

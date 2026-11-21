@@ -1153,7 +1153,42 @@ impl Supervisor {
             let want_subscription = driver.subscribes() && !demoted;
             let mut sources: Vec<BoxStream<'static, anyhow::Result<CommitEvent>>> = Vec::new();
             let after = self.engine.watermark(&ns).map(|w| w.commit);
-            if driver.polls() {
+
+            // The diff log is the default, so a server that does not carry it
+            // must degrade to head polling rather than to silence. Probed
+            // explicitly: a 404 or a schema without the field is permanent and
+            // should fall back now, while an unreachable node is transient and
+            // must NOT cost us the better driver. Inferring either from a
+            // failed poll conflates them.
+            let mut feed_fallback = false;
+            if driver.reads_diff_log() {
+                let probe = difflog::DiffLog::new(
+                    self.http.clone(),
+                    match url::Url::parse(&self.config.upstream.url) {
+                        Ok(upstream) => upstream,
+                        Err(error) => {
+                            tracing::error!(
+                                %ns, error = %error,
+                                "upstream url is unparseable; capture cannot start"
+                            );
+                            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                            continue;
+                        }
+                    },
+                    &self.config.upstream.user,
+                    &self.config.upstream.pass,
+                    Arc::new(|| std::time::Duration::from_millis(1)),
+                );
+                if probe.availability(&ns).await == difflog::Availability::Absent {
+                    feed_fallback = true;
+                    tracing::warn!(
+                        %ns,
+                        "this server does not carry /api/graphql/_difflog; falling back to head                          polling. Capture still works, but every event costs a log walk and                          /api/log is O(depth) — upgrade the server to get the feed."
+                    );
+                }
+            }
+
+            if driver.polls() || feed_fallback {
                 // The interval is asked for per tick rather than fixed here, so
                 // a namespace that nobody has read lately backs off without the
                 // stream being rebuilt. See `Supervisor::poll_interval`.
@@ -1165,7 +1200,7 @@ impl Supervisor {
                 );
                 sources.push(poll.subscribe(&ns, after.clone()));
             }
-            if driver.reads_diff_log() {
+            if driver.reads_diff_log() && !feed_fallback {
                 // One source, and it supplies parents — so unlike the head
                 // poll it needs no reconciling walk behind it.
                 let supervisor = Arc::clone(&self);

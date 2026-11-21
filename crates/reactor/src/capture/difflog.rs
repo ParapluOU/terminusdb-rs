@@ -170,6 +170,65 @@ pub struct Record {
     pub commit: String,
 }
 
+/// Why a feed probe said no.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Availability {
+    /// The feed answered. Use it.
+    Present,
+    /// The server does not carry the feed — a 404, or a schema without the
+    /// field. Permanent for this server, so fall back rather than back off.
+    Absent,
+    /// Something else: unreachable, unauthorized, a transient 5xx. The feed may
+    /// well be there, so backing off and retrying is right and demoting to a
+    /// weaker driver would be giving up on evidence we do not have.
+    Unknown,
+}
+
+impl DiffLog {
+    /// Ask whether this server carries the feed, in one request.
+    ///
+    /// Called before a stream is built rather than inferred from failures,
+    /// because the two cases need opposite responses: an absent feed should
+    /// fall back to polling immediately and permanently, while an unreachable
+    /// node should keep retrying. Guessing from a failed poll conflates them,
+    /// and guessing wrong in the pessimistic direction is what turns a cache
+    /// silently stale.
+    pub async fn availability(&self, ns: &Namespace) -> Availability {
+        let endpoint = match self.endpoint(ns) {
+            Ok(endpoint) => endpoint,
+            Err(_) => return Availability::Unknown,
+        };
+        let response = self
+            .http
+            .post(endpoint)
+            .basic_auth(&self.user, Some(&self.pass))
+            .json(&serde_json::json!({ "query": "{ __typename }" }))
+            .send()
+            .await;
+        let Ok(response) = response else {
+            return Availability::Unknown;
+        };
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Availability::Absent;
+        }
+        if !response.status().is_success() {
+            return Availability::Unknown;
+        }
+        let Ok(text) = response.text().await else {
+            return Availability::Unknown;
+        };
+        // A server whose GraphQL does not know the field answers 200 with an
+        // errors array, so the status alone does not settle it.
+        if text.contains("Cannot query field")
+            || text.contains("Unknown field")
+            || text.contains("Unknown type")
+        {
+            return Availability::Absent;
+        }
+        Availability::Present
+    }
+}
+
 impl CommitSource for DiffLog {
     fn name(&self) -> &'static str {
         "difflog"
@@ -380,6 +439,15 @@ mod tests {
         .unwrap();
         assert_eq!(Some(2), page.rewound_to);
         assert!(page.records.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_node_is_unknown_rather_than_absent() {
+        // The distinction is load-bearing: Absent falls back to polling for
+        // good, Unknown keeps retrying. Treating a down node as Absent would
+        // permanently downgrade a capable server.
+        let feed = feed(Duration::from_millis(1));
+        assert_eq!(Availability::Unknown, feed.availability(&ns()).await);
     }
 
     #[test]
