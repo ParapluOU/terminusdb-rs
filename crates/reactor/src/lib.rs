@@ -62,6 +62,7 @@ pub mod frontend;
 pub mod ids;
 pub mod metrics;
 pub mod predicate;
+pub mod registry;
 pub mod schema_index;
 pub mod store;
 pub mod strip;
@@ -87,6 +88,7 @@ pub use ids::{
     ClassName, ContentHash, DocId, Epoch, Namespace, Position, PropName, Seq, ShapeId, Watermark,
 };
 pub use metrics::Metrics;
+pub use registry::{Registry, SharedRegistry, Source as TrackSource, Tracked};
 pub use schema_index::{PropKind, SchemaIndex};
 pub use store::{FragmentStore, FsCasStore, MemoryStore, TieredStore};
 pub use strip::{strip, StripSpec};

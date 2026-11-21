@@ -137,6 +137,61 @@ is scoped to, especially: authorization on a derived value is "whoever may read
 this namespace may read values derived from it", which does not separate two
 users' views of the same derivation.
 
+## Reads that span databases
+
+A derivation is **one namespace, one snapshot**. Both halves are deliberate, and
+neither is a missing feature:
+
+- A dependency term (`Doc(id)`, `DocField`, `Edge`, `Index`) carries no
+  namespace. The graph is partitioned per database with a single writer each —
+  which is what makes the fill/commit race exactly solvable — so there is no way
+  to express "dies if `Doc(X)` in database A *or* `Doc(Y)` in database B
+  changes", and no writer that could apply it.
+- A scope whose reads were pinned at two commits is refused, because a value
+  computed across two snapshots is true at neither. Two databases commit
+  independently, so one snapshot across both does not exist.
+
+So for a view assembled from several databases — a tenant's own data plus
+globally shared content — do one of these:
+
+**Cache the leaves and recompose per request.** Each database's reads are
+ordinary cached reads as soon as that namespace is tracked
+(`POST /_reactor/namespace`, or `[capture].auto_register`). The cost that hurts
+is the round trips, not the assembling, so this recovers nearly all of the win
+with no composition at all.
+
+**Or store the composition keyed on the revisions it was built from:**
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+struct Envelope { chunks: Vec<(String, String)> }   // (chunk id, revision)
+
+#[async_trait::async_trait]
+impl Derive for Envelope {
+    type Output = Rendered;
+    const NAME: &'static str = "Envelope";
+
+    async fn compute(&self, scope: &Scope) -> anyhow::Result<Rendered> {
+        // Read each chunk at the revision this envelope names — from whichever
+        // database holds it.
+        render(&self.chunks, scope).await
+    }
+
+    fn dependencies(&self) -> Dependencies {
+        // Over a known revision set the result is immutable: there is nothing
+        // to invalidate, because nothing can change under it.
+        Dependencies::Independent
+    }
+}
+```
+
+The revision set is in the parameters, so it is in the key; `Independent` says
+the value does not depend on anything that can move. That is a *stronger*
+statement than any dependency term could make, and an application that records
+which revisions it composed already has it. The namespace the value is stored in
+still has to be tracked, and its `X-Reactor-At` commit still has to resolve
+there — store it in the database that publishes the composition.
+
 ## The hazard this cannot see
 
 If your closure reads something the scope does not go through — another

@@ -78,20 +78,37 @@ async fn main() -> anyhow::Result<()> {
         .context("connecting to the local TerminusDB node")?,
     );
 
+    // ---- which namespaces we track
+    //
+    // Seeded from the configuration and added to at run time: an application
+    // with a database per tenant cannot list them in a file.
+    let registry = Arc::new(terminusdb_reactor::Registry::new(
+        config.namespaces(),
+        config.capture.max_tracked_namespaces,
+    ));
+
     // ---- capture
     let (hints, hint_rx) = tokio::sync::mpsc::unbounded_channel::<CaptureHint>();
     let supervisor = Arc::new(Supervisor::new(
         Arc::clone(&engine),
         Arc::clone(&client),
         Arc::clone(&config),
+        Arc::clone(&registry),
     ));
     let capture = tokio::spawn(Arc::clone(&supervisor).run(hint_rx));
 
     // ---- the front end
     let proxy = Arc::new(frontend::build_proxy(&config)?);
     let gate = Arc::new(frontend::build_gate(&config)?);
-    let state =
-        AppState::new(Arc::clone(&config), Arc::clone(&engine), proxy, gate, hints).into_shared();
+    let state = AppState::new(
+        Arc::clone(&config),
+        Arc::clone(&engine),
+        proxy,
+        gate,
+        hints,
+        registry,
+    )
+    .into_shared();
     let app = frontend::router(state);
 
     let addr = config.listen_addr()?;

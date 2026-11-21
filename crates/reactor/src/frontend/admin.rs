@@ -17,6 +17,7 @@ use http::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use crate::analyze::{self, ReqView};
+use crate::capture::CaptureHint;
 use crate::engine::WriterMsg;
 use crate::ids::{ContentHash, Namespace};
 
@@ -193,7 +194,7 @@ pub async fn explain(
         target,
         tracked: ns
             .as_ref()
-            .map(|ns| state.config.tracks(ns))
+            .map(|ns| state.registry.tracks(ns))
             .unwrap_or(false),
         head: ns
             .as_ref()
@@ -250,6 +251,119 @@ pub async fn scope(State(state): State<Arc<AppState>>, Path(id): Path<String>) -
         refusal,
     })
     .into_response()
+}
+
+/// The request body for `POST`/`DELETE` `/_reactor/namespace`.
+#[derive(Debug, Deserialize)]
+pub struct NamespaceRequest {
+    /// Organization.
+    pub org: String,
+    /// Database.
+    pub db: String,
+    /// Branch. Defaults to `main`.
+    #[serde(default = "default_main")]
+    pub branch: String,
+}
+
+/// What a registration reports back.
+#[derive(Debug, Serialize)]
+pub struct TrackReport {
+    /// `org/db/local/branch/<branch>`.
+    pub namespace: String,
+    /// Whether this call started tracking it, as opposed to finding it already
+    /// tracked. Registration is idempotent, so `false` is a success.
+    pub added: bool,
+    /// How many namespaces are tracked now.
+    pub tracked: usize,
+    /// The bound.
+    pub cap: usize,
+}
+
+/// `GET /_reactor/namespace`
+///
+/// Every tracked namespace, where it came from, and how long since a read
+/// touched it — which is also what decides how often its head is polled.
+pub async fn namespaces(State(state): State<Arc<AppState>>) -> Json<Vec<crate::registry::Tracked>> {
+    Json(state.registry.report())
+}
+
+/// `POST /_reactor/namespace`
+///
+/// Start tracking a namespace. Idempotent, so an application that creates a
+/// database per tenant can call this on the path that creates the database, or
+/// on every request, without bookkeeping of its own.
+///
+/// Tracking means two things happen: reads of that namespace become cacheable,
+/// and a capture task starts watching its head. The first read will still be a
+/// miss — there is no position to pin a fill at until the watermark lands.
+pub async fn track(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<NamespaceRequest>,
+) -> Response {
+    let ns = Namespace::new(request.org, request.db, request.branch);
+    match state
+        .registry
+        .track(ns.clone(), crate::registry::Source::Registered)
+    {
+        Ok(added) => {
+            if added {
+                // Capture is what makes tracking mean anything: without a
+                // watermark nothing in the namespace is served from cache.
+                state.hint(CaptureHint::Track { ns: ns.clone() });
+                tracing::info!(%ns, "namespace registered");
+            }
+            Json(TrackReport {
+                namespace: ns.path(),
+                added,
+                tracked: state.registry.len(),
+                cap: state.registry.cap(),
+            })
+            .into_response()
+        }
+        Err(full) => (
+            StatusCode::INSUFFICIENT_STORAGE,
+            format!(
+                "{full}. Reads of {ns} are proxied uncached rather than evicting a namespace \
+                 something may be using. Raise [capture].max_tracked_namespaces if this node \
+                 has the capacity for another capture task.\n"
+            ),
+        )
+            .into_response(),
+    }
+}
+
+/// `DELETE /_reactor/namespace`
+///
+/// Stop tracking a namespace, and drop what was cached for it.
+///
+/// The purge is the point: an untracked namespace has no capture task, so
+/// entries left behind would be invalidated by nothing. A namespace named in
+/// the configuration file cannot be untracked — the file is the operator's
+/// statement of intent, and the process would track it again on restart anyway.
+pub async fn untrack(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<NamespaceRequest>,
+) -> Response {
+    let ns = Namespace::new(request.org, request.db, request.branch);
+    match state.registry.untrack(&ns) {
+        Ok(false) => (StatusCode::OK, format!("{ns} was not tracked\n")).into_response(),
+        Ok(true) => {
+            // Forget the watermark too: a namespace we have stopped watching
+            // must not look current if it is tracked again later.
+            if let Err(err) = state.engine.send(
+                &ns,
+                WriterMsg::Purge {
+                    forget_watermark: true,
+                },
+            ) {
+                tracing::warn!(%ns, error = %err, "untracked, but the purge did not reach the writer");
+            }
+            state.recorder.clear();
+            tracing::info!(%ns, "namespace untracked and purged");
+            (StatusCode::OK, format!("untracked and purged {ns}\n")).into_response()
+        }
+        Err(configured) => (StatusCode::CONFLICT, format!("{configured}\n")).into_response(),
+    }
 }
 
 /// The request body for `/_reactor/invalidate`.

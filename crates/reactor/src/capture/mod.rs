@@ -917,6 +917,16 @@ pub enum CaptureHint {
         /// Which namespace.
         ns: Namespace,
     },
+    /// Start capturing a namespace that was registered at run time.
+    ///
+    /// The registry decides *whether* a namespace is tracked; this is what
+    /// makes tracking mean something — without a capture task there is no
+    /// watermark, and without a watermark nothing in that namespace is served
+    /// from cache at all.
+    Track {
+        /// Which namespace.
+        ns: Namespace,
+    },
 }
 
 /// Owns one capture task per configured namespace.
@@ -927,6 +937,12 @@ pub struct Supervisor {
     engine: Arc<Engine>,
     client: Arc<terminusdb_client::TerminusDBHttpClient>,
     config: Arc<crate::config::Config>,
+    /// Which namespaces have a capture task, so registration can be idempotent.
+    running: dashmap::DashSet<Namespace>,
+    /// Shared with the front end: which namespaces are tracked, and how long
+    /// since each was read. The second half is what lets an idle namespace be
+    /// polled rarely.
+    registry: crate::registry::SharedRegistry,
 }
 
 impl Supervisor {
@@ -935,12 +951,34 @@ impl Supervisor {
         engine: Arc<Engine>,
         client: Arc<terminusdb_client::TerminusDBHttpClient>,
         config: Arc<crate::config::Config>,
+        registry: crate::registry::SharedRegistry,
     ) -> Self {
         Self {
             engine,
             client,
             config,
+            running: dashmap::DashSet::new(),
+            registry,
         }
+    }
+
+    /// The head-poll interval for a namespace, by how recently it was read.
+    ///
+    /// The whole point of the idle interval: with a database per tenant, most
+    /// are idle most of the time, and polling every head every 150ms to notice
+    /// commits nobody is waiting for is the dominant cost of that layout.
+    fn poll_interval(&self, ns: &Namespace) -> std::time::Duration {
+        let idle_after = std::time::Duration::from_millis(self.config.capture.idle_after_ms);
+        let idle = self
+            .registry
+            .idle_for(ns)
+            .map(|idle| idle >= idle_after)
+            .unwrap_or(false);
+        std::time::Duration::from_millis(if idle {
+            self.config.capture.idle_poll_interval_ms
+        } else {
+            self.config.capture.poll_interval_ms
+        })
     }
 
     /// An applier wired to the live node.
@@ -984,10 +1022,7 @@ impl Supervisor {
     pub async fn run(self: Arc<Self>, hints: tokio::sync::mpsc::UnboundedReceiver<CaptureHint>) {
         let mut tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
         for ns in self.config.namespaces() {
-            let supervisor = Arc::clone(&self);
-            tasks.push(tokio::spawn(async move {
-                supervisor.run_namespace(ns).await;
-            }));
+            tasks.push(self.start(ns));
         }
         let supervisor = Arc::clone(&self);
         tasks.push(tokio::spawn(async move {
@@ -998,6 +1033,32 @@ impl Supervisor {
         }
     }
 
+    /// Spawn capture for one namespace, once.
+    ///
+    /// Idempotent because registration is: a client that registers a namespace
+    /// on every request must not accumulate capture tasks, and a second task
+    /// for one namespace would poll the same head twice and fight over the same
+    /// writer mailbox.
+    pub fn start(self: &Arc<Self>, ns: Namespace) -> tokio::task::JoinHandle<()> {
+        if !self.running.insert(ns.clone()) {
+            tracing::debug!(%ns, "capture is already running for this namespace");
+            return tokio::spawn(async {});
+        }
+        // A namespace registered at run time has no writer yet: the writers for
+        // configured namespaces are spawned at startup. `take_writer` yields a
+        // writer exactly once per namespace, so this cannot produce a second
+        // one — the single-writer invariant stays structural rather than
+        // becoming a thing to remember here.
+        if let Some(writer) = self.engine.take_writer(&ns) {
+            tracing::debug!(%ns, "starting a writer for a namespace registered at run time");
+            tokio::spawn(writer.run());
+        }
+        let supervisor = Arc::clone(self);
+        tokio::spawn(async move {
+            supervisor.run_namespace(ns).await;
+        })
+    }
+
     /// Apply frontend hints as they arrive.
     async fn run_hints(
         self: Arc<Self>,
@@ -1006,6 +1067,14 @@ impl Supervisor {
         let applier = self.applier();
         while let Some(hint) = hints.recv().await {
             let (ns, event) = match hint {
+                CaptureHint::Track { ns } => {
+                    // Not an event: a namespace to start watching. The task
+                    // establishes the watermark itself, which is the thing that
+                    // makes the namespace cacheable.
+                    tracing::info!(%ns, "tracking a namespace registered at run time");
+                    self.start(ns);
+                    continue;
+                }
                 CaptureHint::Commit { ns, commit } => (ns, CommitEvent::new(commit)),
                 CaptureHint::Resync { ns } => {
                     // We do not know the new head; ask the node.
@@ -1018,7 +1087,7 @@ impl Supervisor {
                     }
                 }
             };
-            if !self.config.tracks(&ns) {
+            if !self.registry.tracks(&ns) {
                 continue;
             }
             if let Err(err) = applier.apply(&ns, &event).await {
@@ -1056,8 +1125,9 @@ impl Supervisor {
 
         // One subscription per namespace, held for as long as it stays valid.
         //
-        // Three things used to churn it, and churn is expensive: the fork caps
-        // SSE subscriptions **per user** (default 20), and a Reactor tracking
+        // Three things used to churn it, and churn is expensive: the server
+        // caps SSE subscriptions **per user** (20 by default, from
+        // `TERMINUSDB_SSE_MAX_SUBSCRIPTIONS_PER_USER`), and a Reactor tracking
         // several namespaces and reopening streams will exhaust that cap and be
         // refused — losing low-latency capture for the whole process. So:
         //
@@ -1076,9 +1146,14 @@ impl Supervisor {
             let mut sources: Vec<BoxStream<'static, anyhow::Result<CommitEvent>>> = Vec::new();
             let after = self.engine.watermark(&ns).map(|w| w.commit);
             if driver.polls() {
-                let poll = headpoll::HeadPoll::new(
+                // The interval is asked for per tick rather than fixed here, so
+                // a namespace that nobody has read lately backs off without the
+                // stream being rebuilt. See `Supervisor::poll_interval`.
+                let supervisor = Arc::clone(&self);
+                let polled = ns.clone();
+                let poll = headpoll::HeadPoll::with_interval(
                     Arc::clone(&self.client),
-                    std::time::Duration::from_millis(self.config.capture.poll_interval_ms),
+                    Arc::new(move || supervisor.poll_interval(&polled)),
                 );
                 sources.push(poll.subscribe(&ns, after.clone()));
             }

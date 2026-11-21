@@ -313,8 +313,61 @@ impl Driver {
 pub struct CaptureConfig {
     /// Default driver for every namespace.
     pub driver: Driver,
+    /// Driver for namespaces registered at run time, rather than configured.
+    ///
+    /// Separate from [`Self::driver`], and defaulting to `poll`, because of how
+    /// the server's subscriptions are keyed: a `_ChangeSet` cohort is
+    /// `cohort(Descriptor, Class, Operation, Selection, Mode)`, so a
+    /// subscription covers **one database** and there is no org-wide stream to
+    /// attach to. An application with a database per tenant would therefore
+    /// want one SSE connection per tenant, against a server that caps them at
+    /// **20 per user** by default (`SubscriptionLimiter::max_per_user` in
+    /// upstream's `terminusdb-webserver`, raisable with
+    /// `TERMINUSDB_SSE_MAX_SUBSCRIPTIONS_PER_USER`). Reactor authenticates as
+    /// one upstream user, so every namespace it subscribes to draws on the same
+    /// bucket — and a slot is **never returned** once its client goes away, so
+    /// the cap is a lifetime budget and every resubscribe spends one of it
+    /// (reproduction: terminusdb/terminusdb#2673). Raising the cap buys a
+    /// bigger one-off allowance, not headroom, so the many-namespace case
+    /// polls and only the handful named in a file subscribe.
+    pub dynamic_driver: Driver,
+    /// Register a namespace the first time it is read, rather than requiring
+    /// `POST /_reactor/namespace`.
+    ///
+    /// Off by default, and deliberately: invariant 6 says an unknown route is
+    /// forwarded rather than cached, and "track every database anybody
+    /// mentions" inverts that default. Turn it on for an application that
+    /// creates databases (a room or publication per tenant) and would otherwise
+    /// have to register each one; leave it off if the set of databases is known,
+    /// because then an unexpected namespace is a bug and should not quietly
+    /// acquire a capture task.
+    ///
+    /// The first read of a namespace is never a hit either way: registration
+    /// establishes a watermark, and until that lands there is no position to
+    /// pin a fill at.
+    pub auto_register: bool,
+    /// Bound on how many namespaces may be tracked at once.
+    ///
+    /// Each one costs a capture task, a writer and a schema index, so this is
+    /// the knob that keeps a per-tenant layout from turning into a thousand
+    /// poll loops. Over the cap, registration is **refused** rather than
+    /// evicting a namespace someone is using: a refused registration means that
+    /// database is proxied uncached, which is a performance loss, where
+    /// evicting one that is in use would be a correctness risk.
+    pub max_tracked_namespaces: usize,
     /// Head-poll interval. On a reader node this *is* the staleness bound.
     pub poll_interval_ms: u64,
+    /// Head-poll interval for a namespace nothing has read lately.
+    ///
+    /// With a database per tenant, most of them are idle most of the time, and
+    /// polling a thousand heads every 150ms to notice a commit nobody is
+    /// waiting for is the whole cost of the layout. Staleness in a namespace
+    /// nobody reads costs nothing — invariant 4 means a lagging watermark
+    /// serves an older snapshot rather than a wrong one — and the first read
+    /// after a quiet spell is a miss that goes to the origin anyway.
+    pub idle_poll_interval_ms: u64,
+    /// How long without a read before a namespace counts as idle.
+    pub idle_after_ms: u64,
     /// Above this many changed documents in one commit, stop paying for
     /// per-document reads and fire coarse terms instead. Over-invalidation is a
     /// performance bug; under-invalidation is a correctness bug.
@@ -328,7 +381,12 @@ impl Default for CaptureConfig {
     fn default() -> Self {
         Self {
             driver: Driver::Both,
+            dynamic_driver: Driver::Poll,
+            auto_register: false,
+            max_tracked_namespaces: 512,
             poll_interval_ms: 150,
+            idle_poll_interval_ms: 5_000,
+            idle_after_ms: 30_000,
             diff_threshold: 2000,
             max_gap_walk: 500,
         }
@@ -492,6 +550,21 @@ impl Config {
         if self.capture.max_gap_walk == 0 {
             bail!("[capture].max_gap_walk must be at least 1");
         }
+        if self.capture.idle_poll_interval_ms < self.capture.poll_interval_ms {
+            bail!(
+                "[capture].idle_poll_interval_ms ({}) must be at least \
+                 [capture].poll_interval_ms ({}) — an idle namespace is polled *less* often, \
+                 not more",
+                self.capture.idle_poll_interval_ms,
+                self.capture.poll_interval_ms
+            );
+        }
+        if self.capture.max_tracked_namespaces == 0 {
+            bail!(
+                "[capture].max_tracked_namespaces must be at least 1 — 0 would track nothing, \
+                 which is what leaving [[namespace]] empty already does"
+            );
+        }
         if !(0.0..=1.0).contains(&self.observability.shadow_sample_rate) {
             bail!(
                 "[observability].shadow_sample_rate must be between 0.0 and 1.0, got {}",
@@ -570,10 +643,15 @@ impl Config {
     }
 
     /// The driver for a namespace, honouring its override.
+    ///
+    /// A namespace with no `[[namespace]]` entry was registered at run time, and
+    /// gets [`CaptureConfig::dynamic_driver`] — see there for why that is `poll`
+    /// by default and not `[capture].driver`.
     pub fn driver_for(&self, ns: &Namespace) -> Driver {
-        self.namespace_entry(ns)
-            .and_then(|entry| entry.driver)
-            .unwrap_or(self.capture.driver)
+        match self.namespace_entry(ns) {
+            Some(entry) => entry.driver.unwrap_or(self.capture.driver),
+            None => self.capture.dynamic_driver,
+        }
     }
 
     /// Engine tuning derived from this configuration.
@@ -809,9 +887,11 @@ mod tests {
             Driver::Both
         );
         assert_eq!(
-            config.driver_for(&Namespace::new("admin", "untracked", "main")),
-            Driver::Both,
-            "an untracked namespace still reports the global default"
+            config.driver_for(&Namespace::new("admin", "registered", "main")),
+            Driver::Poll,
+            "a namespace with no [[namespace]] entry was registered at run time, and gets \
+             [capture].dynamic_driver — poll, because a _ChangeSet cohort covers one database \
+             and the per-user SSE cap does not survive a database per tenant"
         );
     }
 

@@ -53,7 +53,7 @@ Everything else follows from these, and each is load-bearing:
 
 All five phases of [`SPEC.md`](SPEC.md) are implemented, russian-doll
 decomposition of document lists included, and application-computed values on
-top. **612 tests pass (532 unit, 80 integration against an embedded TerminusDB
+top. **628 tests pass (542 unit, 86 integration against an embedded TerminusDB
 12.1.0-rc3 server)**, plus 16 in [`terminusdb-cache`](../cache). Not
 production-ready — see the scope limits below — but soundness, precision *and*
 fragment-level reuse are all demonstrated.
@@ -67,6 +67,7 @@ fragment-level reuse are all demonstrated.
 | `compose` | russian-doll decomposition: a list is a spine over per-document fragments | done |
 | `capture/*` | `CommitSource` / `ChangeResolver` / `ReadinessGate` / `CommitHistory` + applier | done |
 | `frontend/value`, `frontend/scope` | application-computed values: observed dependencies, one snapshot per computation | done |
+| `registry` | which namespaces are tracked, and how warm each is | done |
 | `frontend/*`, `config`, `main` | the proxy itself | done |
 | `tests/*` | fidelity, caching, dependencies, predicates, decomposition, auth, capture, spikes | done |
 
@@ -263,6 +264,89 @@ nothing there would hand back a derived value that no commit ever invalidates.
 The application-facing half is [`terminusdb-cache`](../cache): `derivation! { … }`
 plus `cache.get(&spec, …)`, with the scope, the pin and the key composition
 handled for you. Start with its [README](../cache/README.md).
+
+### A database per tenant
+
+Reactor's configuration names the databases it tracks, which is right for a
+handful an operator chose and wrong for an application that *creates* databases.
+A room-, tenant- or publication-per-database layout has thousands of namespaces,
+appearing while the process runs.
+
+```http
+POST /_reactor/namespace     {"org": "admin", "db": "room-8f31"}
+DELETE /_reactor/namespace   {"org": "admin", "db": "room-8f31"}
+GET /_reactor/namespace
+```
+
+Registration is idempotent (call it on the path that creates the database, or on
+every request), and `[capture].auto_register` has Reactor adopt a namespace on
+its first read instead. Tracking a namespace starts a capture task **and** a
+writer for it; `take_writer` is once-only, so the single-writer invariant stays
+structural rather than becoming something to remember. Untracking purges what
+was cached and forgets the watermark, because an entry in a namespace nothing
+watches would be invalidated by nothing. A namespace named in the file cannot be
+untracked at run time.
+
+Two things bound it, and both matter at this scale:
+
+* **`[capture].max_tracked_namespaces`.** Each tracked namespace costs a capture
+  task, a writer and a schema index. Over the cap, registration is **refused** —
+  that database is proxied uncached, a performance loss — rather than evicting
+  one something may be using, which would be a correctness risk.
+* **Idle namespaces are polled rarely.** `[capture].idle_poll_interval_ms`
+  applies to a namespace nothing has read for `idle_after_ms`; the read path
+  records warmth and the poll driver asks for its interval *per tick*, so a
+  namespace going quiet backs off without its stream being rebuilt. Staleness
+  where nobody is reading costs nothing — invariant 4 again — and the first read
+  after a quiet spell is a miss that goes upstream anyway.
+
+**Why polling, and not one subscription for everything.** A `_ChangeSet` cohort
+on the server is keyed
+`cohort(Descriptor, Class, Operation, Selection, Mode)` — the *database* is part
+of the key, and a subscription is registered against one descriptor. There is no
+org-wide stream to attach to, so a database per tenant would mean one SSE
+connection per tenant, against a server that caps them at **20 per user** by
+default — upstream's `SubscriptionLimiter`, raisable with
+`TERMINUSDB_SSE_MAX_SUBSCRIPTIONS_PER_USER`, and counted per *user*, so every
+namespace Reactor subscribes to draws on one bucket.
+
+Worse, and measured: **a slot is never returned.** Once a subscriber's client
+goes away its slot is held for the life of the server process — not reclaimed
+by a commit, nor by the 90s idle timeout (reproduction and diagnosis:
+[terminusdb/terminusdb#2673](https://github.com/terminusdb/terminusdb/pull/2673)).
+So the cap is a budget for the lifetime of the process rather than a concurrency
+limit, every resubscribe spends one, and raising the env var buys a bigger
+one-off allowance rather than headroom. Until upstream reclaims slots,
+subscription-per-database is not a viable shape at all. Hence
+`[capture].dynamic_driver = "poll"` as the default for namespaces registered at
+run time, while a handful named in the file can still subscribe.
+
+### What is *not* cacheable across databases
+
+A composition of reads from several databases — a room's content plus chunks
+from a shared library — cannot be a recorded derived value, and the reason is in
+the term algebra rather than in a missing feature:
+
+* **A `Term` carries no namespace.** `Doc(id)`, `DocField(id, prop)`, `Edge`,
+  `Index` are document-relative and meaningful only inside one namespace, and
+  the dependency graph is partitioned per namespace with a single writer each —
+  which is what makes the fill/commit race exactly solvable. There is no way to
+  say "this dies if `Doc(X)` in database A changes **or** `Doc(Y)` in database B
+  changes", and no writer that could apply it.
+* **A scope is one snapshot.** Reads pinned at two commits are refused, because
+  a value computed across two snapshots is true at neither — and two databases
+  commit independently, so "one snapshot across both" is not a thing that
+  exists.
+
+What works instead, and is better than a cross-namespace scope would be: cache
+the **leaves** — each database's reads are ordinary cached reads once that
+namespace is tracked — and either recompose per request (cheap: the cost was the
+round trips, not the assembling), or store the composition as a value keyed on
+the **revision set it was built from**, with `Dependencies::Independent`. A
+composition over known revisions is immutable by construction, so it needs no
+invalidation at all. That is a stronger statement than any dependency term could
+make, and an application that records which revisions it composed already has
+it.
 
 ### Russian-doll decomposition
 

@@ -52,6 +52,10 @@ pub struct AppState {
     /// fragment is already cached needs no upstream request to know how the
     /// origin wraps it. See [`crate::compose::FramingCache`].
     pub framings: Arc<crate::compose::FramingCache>,
+    /// Which namespaces this node tracks: seeded from the configuration and
+    /// added to at run time, because an application that creates databases
+    /// cannot list them in a file. See [`crate::registry`].
+    pub registry: crate::registry::SharedRegistry,
     /// Open recording scopes: the dependency sets of application-level
     /// computations, observed as their reads go past. See [`scope`].
     pub recorder: Arc<scope::Recorder>,
@@ -73,6 +77,7 @@ impl AppState {
         proxy: Arc<Proxy>,
         auth: Arc<Gate>,
         hints: tokio::sync::mpsc::UnboundedSender<CaptureHint>,
+        registry: crate::registry::SharedRegistry,
     ) -> AppState {
         let analyze = config.analyze_config();
         let fills = Arc::new(FillCoordinator::new(config.upstream.max_inflight_fills));
@@ -84,6 +89,7 @@ impl AppState {
             fills,
             auth,
             framings: Arc::new(crate::compose::FramingCache::default()),
+            registry,
             recorder: Arc::new(scope::Recorder::default()),
             hints,
             this: std::sync::OnceLock::new(),
@@ -124,6 +130,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/_reactor/fragment/{hash}", get(admin::fragment))
         .route("/_reactor/explain", post(admin::explain))
         .route("/_reactor/scope/{id}", get(admin::scope))
+        // Namespaces can be registered while the process runs: an application
+        // with a database per tenant cannot list them in a configuration file.
+        .route(
+            "/_reactor/namespace",
+            get(admin::namespaces)
+                .post(admin::track)
+                .delete(admin::untrack),
+        )
         .route("/_reactor/invalidate", post(admin::invalidate))
         // Application-computed values: the one entry point that puts something
         // into the graph that Reactor did not derive itself.
@@ -171,7 +185,8 @@ mod tests {
         let proxy = Arc::new(build_proxy(&config).unwrap());
         let gate = Arc::new(Gate::Open(AlwaysAllow));
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        AppState::new(config, engine, proxy, gate, tx).into_shared()
+        let registry = Arc::new(crate::registry::Registry::new(config.namespaces(), 16));
+        AppState::new(config, engine, proxy, gate, tx, registry).into_shared()
     }
 
     #[test]

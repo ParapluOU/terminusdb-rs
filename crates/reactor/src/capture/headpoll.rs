@@ -30,10 +30,19 @@ use crate::capture::{CommitEvent, CommitSource};
 use crate::ids::Namespace;
 use terminusdb_client::{CommitId, TerminusDBHttpClient};
 
+/// How long to wait before the next head check.
+///
+/// A function rather than a number because the right interval depends on
+/// whether anybody is reading the namespace. With a database per tenant, most
+/// are idle most of the time, and polling every head at the hot interval to
+/// notice commits nobody is waiting for is the dominant cost of that layout —
+/// so the interval is asked for per tick, not fixed when the stream is built.
+pub type Interval = Arc<dyn Fn() -> Duration + Send + Sync>;
+
 /// Polls the branch head.
 pub struct HeadPoll {
     client: Arc<TerminusDBHttpClient>,
-    interval: Duration,
+    interval: Interval,
 }
 
 /// Longest backoff after repeated failures. Short on purpose: the staleness
@@ -42,12 +51,14 @@ pub struct HeadPoll {
 const MAX_BACKOFF: Duration = Duration::from_secs(5);
 
 impl HeadPoll {
-    /// Build a driver.
+    /// Build a driver with a fixed interval.
     pub fn new(client: Arc<TerminusDBHttpClient>, interval: Duration) -> Self {
-        Self {
-            client,
-            interval: interval.max(Duration::from_millis(1)),
-        }
+        Self::with_interval(client, Arc::new(move || interval))
+    }
+
+    /// Build a driver that asks for its interval before every check.
+    pub fn with_interval(client: Arc<TerminusDBHttpClient>, interval: Interval) -> Self {
+        Self { client, interval }
     }
 }
 
@@ -63,7 +74,7 @@ impl CommitSource for HeadPoll {
     ) -> BoxStream<'static, anyhow::Result<CommitEvent>> {
         let client = Arc::clone(&self.client);
         let ns = ns.clone();
-        let interval = self.interval;
+        let interval = Arc::clone(&self.interval);
         let spec = ns.to_branch_spec();
 
         async_stream::stream! {
@@ -71,12 +82,20 @@ impl CommitSource for HeadPoll {
             // it is not news. Starting from it avoids one redundant event (and
             // therefore one redundant log walk) on every restart.
             let mut last = after;
-            let mut backoff = interval;
+            let mut failures: u32 = 0;
             loop {
-                tokio::time::sleep(backoff).await;
+                // Asked for every tick: a namespace that goes quiet backs off
+                // without the stream being torn down and rebuilt.
+                let base = interval().max(Duration::from_millis(1));
+                let wait = if failures == 0 {
+                    base
+                } else {
+                    (base * 2u32.saturating_pow(failures.min(5))).min(MAX_BACKOFF)
+                };
+                tokio::time::sleep(wait).await;
                 match client.get_latest_commit_id(&spec).await {
                     Ok(head) => {
-                        backoff = interval;
+                        failures = 0;
                         if last.as_ref() == Some(&head) {
                             // The common case. Nothing to report.
                             continue;
@@ -90,7 +109,7 @@ impl CommitSource for HeadPoll {
                     }
                     Err(err) => {
                         tracing::debug!(%ns, error = %err, "head poll failed; backing off");
-                        backoff = (backoff * 2).min(MAX_BACKOFF);
+                        failures = failures.saturating_add(1);
                     }
                 }
             }
@@ -106,20 +125,43 @@ mod tests {
     #[test]
     fn the_interval_is_never_zero() {
         // A zero interval would spin a core at 100% against the node this
-        // process exists to protect.
+        // process exists to protect. Clamped per tick, since the provider can
+        // return anything.
         let client = Arc::new(dummy_client());
         let poll = HeadPoll::new(client, Duration::ZERO);
-        assert!(poll.interval >= Duration::from_millis(1));
+        assert_eq!((poll.interval)(), Duration::ZERO);
+        assert!((poll.interval)().max(Duration::from_millis(1)) >= Duration::from_millis(1));
         assert_eq!(poll.name(), "poll");
     }
 
     #[test]
+    fn the_interval_is_asked_for_every_tick() {
+        // The adaptive case: the same stream polls fast while a namespace is
+        // being read and slowly once it goes quiet, without being rebuilt.
+        let hot = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let flag = Arc::clone(&hot);
+        let interval: Interval = Arc::new(move || {
+            if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                Duration::from_millis(150)
+            } else {
+                Duration::from_secs(5)
+            }
+        });
+        assert_eq!(interval(), Duration::from_millis(150));
+        hot.store(false, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(interval(), Duration::from_secs(5));
+    }
+
+    #[test]
     fn backoff_is_bounded() {
-        let mut backoff = Duration::from_millis(150);
-        for _ in 0..20 {
-            backoff = (backoff * 2).min(MAX_BACKOFF);
+        let base = Duration::from_millis(150);
+        let mut longest = Duration::ZERO;
+        for failures in 1u32..20 {
+            let wait = (base * 2u32.saturating_pow(failures.min(5))).min(MAX_BACKOFF);
+            longest = longest.max(wait);
+            assert!(wait <= MAX_BACKOFF);
         }
-        assert_eq!(backoff, MAX_BACKOFF);
+        assert_eq!(longest, (base * 32).min(MAX_BACKOFF));
     }
 
     /// A client pointed at a port nothing is listening on. Constructing one

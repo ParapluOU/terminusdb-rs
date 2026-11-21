@@ -457,10 +457,35 @@ pub async fn handle(State(state): State<Arc<AppState>>, request: Request<Body>) 
             .await
         }
     };
-    if !state.config.tracks(&ns) {
-        // The safe default for a database nobody configured.
+    if !state.registry.tracks(&ns) {
+        // The safe default for a database nobody configured — unless the
+        // operator asked for the other one. An application that creates a
+        // database per tenant cannot list them in a file, and registering each
+        // one by hand is bookkeeping it will get wrong on some path.
+        if state.config.capture.auto_register {
+            match state
+                .registry
+                .track(ns.clone(), crate::registry::Source::Automatic)
+            {
+                Ok(true) => {
+                    state.hint(crate::capture::CaptureHint::Track { ns: ns.clone() });
+                    tracing::info!(%ns, "registered a namespace on first read");
+                }
+                Ok(false) => {}
+                Err(full) => tracing::warn!(
+                    %ns, %full,
+                    "not registering this namespace; its reads stay uncached"
+                ),
+            }
+        }
+        // This read is forwarded either way: registration has to establish a
+        // watermark before anything here can be cached, and there is no
+        // position to pin a fill at until it does.
         return forward(&state, &request, CacheState::Bypass, Some("untracked")).await;
     }
+    // Warmth, for capture: a namespace being read is polled at the hot
+    // interval, one that has gone quiet at the idle one.
+    state.registry.note_read(&ns);
 
     let schema = state.engine.schema(&ns);
     let plan = analyze::plan(&view, &schema, &state.analyze);
@@ -846,10 +871,24 @@ async fn serve_read(
         .map(|rewrite| StripSpec::new(&rewrite.injected))
         .unwrap_or_default();
 
+    // A caller may refuse a cached answer older than it can tolerate. Distinct
+    // from the fence: `X-Reactor-Min-Version` is about *which commit* this node
+    // has reached, this is about how long ago we looked. A caller that cares
+    // about freshness in seconds rather than in commits has no commit id to
+    // name.
+    let max_staleness = request
+        .headers
+        .get("x-reactor-max-staleness")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_millis);
+
     if let Lookup::Hit(version) = state.engine.lookup(&key, at) {
         if let Some(body) = resolve_body(state, &version) {
-            if policy.fresh_enough(version.age()) {
-                match composition(state, ns, &version, &body, spec.as_ref(), at) {
+            if policy.fresh_enough(version.age())
+                && max_staleness.is_none_or(|bound| version.age() <= bound)
+            {
+                match composition(state, ns, &version, &body, spec.as_ref(), at, max_staleness) {
                     // Every child resolved from cache: no upstream request at
                     // all, which is the point of the whole feature.
                     Composition::Ready { body, hash } => {
@@ -975,6 +1014,7 @@ async fn serve_read(
         request,
         plan_terms.as_deref(),
         augment,
+        max_staleness,
     ) {
         return response;
     }
@@ -1122,6 +1162,7 @@ fn composition(
     body: &Bytes,
     spec: Option<&ListSpec>,
     at: Position,
+    max_staleness: Option<Duration>,
 ) -> Composition {
     let Some(spine) = Spine::decode(body) else {
         // Not a spine. Either decomposition is off, or this key was filled
@@ -1137,8 +1178,15 @@ fn composition(
     for id in &spine.ids {
         let child = child_key(ns, id, spec);
         let found = match state.engine.lookup(&child, at) {
-            Lookup::Hit(child) => resolve_body(state, &child).map(|bytes| (bytes, child.hash)),
-            Lookup::Miss => None,
+            // A child older than the caller's bound counts as *missing*, which
+            // is exactly how an evicted one is treated: the composition becomes
+            // incomplete and those children are refilled. A composed answer is
+            // as old as its oldest part, so applying the bound to the spine
+            // alone would answer "fresh" with stale bytes in it.
+            Lookup::Hit(child) if max_staleness.is_none_or(|bound| child.age() <= bound) => {
+                resolve_body(state, &child).map(|bytes| (bytes, child.hash))
+            }
+            Lookup::Hit(_) | Lookup::Miss => None,
         };
         complete &= found.is_some();
         resolved.push(found);
@@ -1197,13 +1245,16 @@ fn compose_single(
     request: &UpstreamRequest,
     plan_terms: Option<&[Term]>,
     augment: Augment,
+    max_staleness: Option<Duration>,
 ) -> Option<Response> {
     let spec = spec?;
     let id = spec.single()?;
     let framing = state.framings.get(ns, parent_key.shape)?;
     let child = match state.engine.lookup(&child_key(ns, id, spec), at) {
-        Lookup::Hit(child) => child,
-        Lookup::Miss => return None,
+        Lookup::Hit(child) if max_staleness.is_none_or(|bound| child.age() <= bound) => child,
+        // Too old for this caller, or absent: either way this shortcut cannot
+        // answer, and the ordinary fill path can.
+        Lookup::Hit(_) | Lookup::Miss => return None,
     };
     let bytes = resolve_body(state, &child)?;
     // Reconstruct the parent this read *would* have had, so the `ETag` is the

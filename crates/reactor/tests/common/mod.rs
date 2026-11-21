@@ -495,18 +495,30 @@ impl Reactor {
             .context("building the upstream client")?,
         );
 
+        let registry = Arc::new(terminusdb_reactor::Registry::new(
+            config.namespaces(),
+            config.capture.max_tracked_namespaces,
+        ));
         let (hints, hint_rx) = tokio::sync::mpsc::unbounded_channel::<CaptureHint>();
         let supervisor = Arc::new(Supervisor::new(
             Arc::clone(&engine),
             Arc::clone(&client),
             Arc::clone(&config),
+            Arc::clone(&registry),
         ));
         tasks.push(tokio::spawn(Arc::clone(&supervisor).run(hint_rx)));
 
         let proxy = Arc::new(frontend::build_proxy(&config)?);
         let gate = Arc::new(frontend::build_gate(&config)?);
-        let state = AppState::new(Arc::clone(&config), Arc::clone(&engine), proxy, gate, hints)
-            .into_shared();
+        let state = AppState::new(
+            Arc::clone(&config),
+            Arc::clone(&engine),
+            proxy,
+            gate,
+            hints,
+            Arc::clone(&registry),
+        )
+        .into_shared();
         let app = frontend::router(state);
         tasks.push(tokio::spawn(async move {
             let _ = axum::serve(listener, app).await;
@@ -625,6 +637,16 @@ impl Reactor {
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
+        Probe::of(request.send().await?).await
+    }
+
+    /// A raw `DELETE` with a JSON body, for the namespace endpoint.
+    pub async fn delete(&self, path_and_query: &str, body: serde_json::Value) -> Result<Probe> {
+        let request = self
+            .http
+            .delete(self.url(path_and_query))
+            .basic_auth("admin", Some("root"))
+            .json(&body);
         Probe::of(request.send().await?).await
     }
 

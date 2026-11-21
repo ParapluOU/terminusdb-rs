@@ -104,6 +104,46 @@ auth_ttl_secs = 30
 #                    The default, and the right answer when unsure.
 driver = "both"
 poll_interval_ms = 150
+# Interval for a namespace nothing has read for idle_after_ms.
+#
+# With a database per tenant most are idle most of the time, and polling every
+# head every 150ms to notice commits nobody is waiting for is the whole cost of
+# that layout. Staleness in a namespace nobody reads costs nothing — invariant 4
+# means a lagging watermark serves an older snapshot rather than a wrong one —
+# and the first read after a quiet spell is a miss that goes upstream anyway.
+idle_poll_interval_ms = 5000
+idle_after_ms = 30000
+#
+# Namespaces registered while the process runs, rather than listed in [[namespace]].
+#
+# An application that creates databases — a room, tenant or publication per
+# database — cannot list them in this file, so it registers them through
+# POST /_reactor/namespace (idempotent) or has Reactor adopt them on first read.
+#
+# auto_register inverts the safe default (invariant 6: an unknown route is
+# forwarded, never cached), so it is off unless you ask. Turn it on when the set
+# of databases is open; leave it off when it is known, because then an
+# unexpected namespace is a bug rather than a tenant.
+# auto_register = true
+#
+# Each tracked namespace costs a capture task, a writer and a schema index, so
+# this is the knob that keeps a per-tenant layout from becoming a thousand poll
+# loops. Over the cap, registration is refused — that database is proxied
+# uncached — rather than evicting a namespace something may be using.
+max_tracked_namespaces = 512
+#
+# Driver for namespaces registered at run time. Separate from [capture].driver,
+# and "poll" by default, because of how the server keys subscriptions: a
+# _ChangeSet cohort is (database, class, operation, selection, mode), so one
+# subscription covers ONE database and there is no org-wide stream to attach to.
+# A database per tenant would therefore want one SSE connection per tenant,
+# against a server that caps them at 20 per user by default (raisable with
+# TERMINUSDB_SSE_MAX_SUBSCRIPTIONS_PER_USER; Reactor authenticates as one user,
+# so every namespace it subscribes to shares that budget). A slot is also never
+# returned once its client goes away, so that is a lifetime budget and each
+# resubscribe spends one (terminusdb/terminusdb#2673). The many-namespace case
+# polls; a handful named above can subscribe.
+dynamic_driver = "poll"
 # Above this many changed documents in one commit, stop paying for a per-commit
 # /api/diff and fire coarse terms instead. Over-invalidation is a performance
 # bug; under-invalidation is a correctness bug.

@@ -228,13 +228,74 @@ deploy cannot serve values computed by code that no longer exists), nesting for
 per-member granularity, and the one hazard it cannot detect: a closure that
 reads something outside the scope.
 
-## 6. Request headers an application can send
+## 6. A database per tenant
+
+If your application *creates* databases — a room, tenant or publication each —
+they cannot be listed in the configuration file, so register them at run time:
+
+```bash
+curl -u admin:root -X POST http://localhost:6364/_reactor/namespace \
+     -H 'Content-Type: application/json' \
+     -d '{"org": "admin", "db": "room-8f31"}'
+# {"namespace":"admin/room-8f31/local/branch/main","added":true,"tracked":2,"cap":512}
+```
+
+Idempotent, so the natural place is the code path that creates the database —
+or every request, if that is simpler. `DELETE` the same path to stop tracking
+and drop what was cached; `GET /_reactor/namespace` lists what is tracked, where
+each entry came from, and how long since a read touched it.
+
+Alternatively set `[capture].auto_register = true` and the first read of a
+database registers it. Either way **that first read is a miss**: tracking has to
+establish a watermark before anything in the namespace can be cached, and there
+is no position to pin a fill at until it does.
+
+Two limits to size up front:
+
+- `[capture].max_tracked_namespaces` (512) bounds how many namespaces have a
+  capture task and a writer. Over it, registration is refused and that database
+  is proxied uncached — deliberately, rather than evicting a namespace someone
+  is using.
+- Namespaces nothing has read for `[capture].idle_after_ms` are polled at
+  `idle_poll_interval_ms` instead of `poll_interval_ms`. With a database per
+  tenant that is the difference between one poll loop per *active* tenant and
+  one per tenant that has ever existed.
+
+**Do not expect one subscription to cover every database.** The server keys a
+`_ChangeSet` cohort by `(database, class, operation, selection, mode)`, so a
+subscription covers one database and there is no org-wide stream; a database per
+tenant would want one SSE connection per tenant, against a default cap of 20
+per *user* (`TERMINUSDB_SSE_MAX_SUBSCRIPTIONS_PER_USER` raises it; Reactor
+authenticates as one user, so all of its subscriptions share that budget). And
+a slot is never returned once its client goes away — not on a commit, not after
+the idle timeout — so the cap is a lifetime budget and each resubscribe spends
+one of it ([terminusdb/terminusdb#2673](https://github.com/terminusdb/terminusdb/pull/2673)).
+Namespaces registered at run time therefore poll by default
+(`[capture].dynamic_driver`).
+
+### Reads that span databases
+
+A view assembled from several databases — a room plus chunks from a shared
+library — cannot be a *recorded* derived value: a dependency term carries no
+namespace, and a scope is one snapshot, which two independently committing
+databases do not share. Two things work instead:
+
+1. **Cache the leaves and recompose per request.** Each database's reads are
+   ordinary cached reads as soon as that namespace is tracked, and assembling
+   them is cheap next to the round trips it saves.
+2. **Store the composition keyed on the revisions it was built from**, with
+   `Dependencies::Independent`. Over a known revision set a composition is
+   immutable, so it needs no invalidation — a stronger guarantee than any
+   dependency term could express, and one your domain already has if it records
+   which revisions it composed.
+
+## 7. Request headers an application can send
 
 | Header | Effect |
 |---|---|
 | `X-Reactor-Bypass: 1` | Skip the cache for this request |
 | `X-Reactor-Min-Version: <commit>` | Refuse to answer from state older than this commit (see below) |
-| `X-Reactor-Max-Staleness: <ms>` | Accept a cached answer only if younger than this |
+| `X-Reactor-Max-Staleness: <ms>` | Accept a cached answer only if younger than this. Applies to every fragment consulted, so a composed list with one stale member is refilled rather than reported fresh |
 | `X-Reactor-Invalidate-On: <terms>` | State a WOQL result's dependencies |
 | `X-Reactor-Explain: 1` | Report the plan for this request |
 | `X-Reactor-Record: <scope>` | Record this read's dependencies into a scope, and report them as `X-Reactor-Deps` (set for you by `terminusdb-cache`) |
@@ -242,7 +303,7 @@ reads something outside the scope.
 Response headers: `Cache-Status`, `ETag`, `Age`, `X-Reactor-Node`,
 `X-Reactor-Head`, and `TerminusDB-Data-Version` as the origin sent it.
 
-## 7. Consistency, stated plainly
+## 8. Consistency, stated plainly
 
 > Reactor is never weaker than the TerminusDB node it fronts.
 
@@ -268,7 +329,7 @@ afterwards — would make `X-Reactor-Head` claim currency the node does not have
 and would break both read-your-writes and the `X-Reactor-Min-Version` fence.
 Watch `reactor_watermark_lag_ms`.
 
-## 8. Operating it
+## 9. Operating it
 
 | Endpoint | Purpose |
 |---|---|
@@ -318,7 +379,7 @@ refilled. That is correct behaviour (an evicted key is a miss, never a wrong
 answer) but it costs upstream requests; raise the cap if there is memory for it.
 `reactor_tracked_keys` is the current count.
 
-## 9. Rolling it out
+## 10. Rolling it out
 
 1. Start with `[analyze].strict = true`. Anything Reactor cannot prove it may
    cache is bypassed instead of cached coarsely — lower hit rate, smallest

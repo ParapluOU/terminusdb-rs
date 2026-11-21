@@ -222,7 +222,7 @@ pub async fn put(
     {
         return unauthorized();
     }
-    if !state.config.tracks(&ns) {
+    if !state.registry.tracks(&ns) {
         // Nothing watches this namespace's commits, so nothing could ever
         // invalidate the value. Storing it would be storing something stale.
         return (
