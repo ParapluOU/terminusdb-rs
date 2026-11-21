@@ -5336,6 +5336,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
+name = "pbkdf2"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8ed6a7761f76e3b9f92dfb0a60a6a6477c61024b775147ff0973a02653abaf2"
+dependencies = [
+ "digest 0.10.7",
+]
+
+[[package]]
 name = "pear"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7880,14 +7889,16 @@ dependencies = [
 [[package]]
 name = "terminusdb-community"
 version = "0.1.0"
-source = "git+https://github.com/ParapluOU/terminusdb.git?rev=20de473e93b977737bb59f6de4c463ffab5fa497#20de473e93b977737bb59f6de4c463ffab5fa497"
+source = "git+https://github.com/ParapluOU/terminusdb.git?rev=6e47baf5f2ed2be5d355ae65be1a3b7dd9b8672e#6e47baf5f2ed2be5d355ae65be1a3b7dd9b8672e"
 dependencies = [
  "aho-corasick 0.7.20",
+ "axum 0.8.9",
  "base64 0.22.1",
  "bimap",
  "chrono",
  "float-ord",
  "handlebars",
+ "hmac",
  "itertools 0.10.5",
  "jsonwebtoken",
  "juniper",
@@ -7897,6 +7908,7 @@ dependencies = [
  "lru 0.16.4",
  "nom",
  "ordered-float 3.9.2",
+ "pbkdf2",
  "rand 0.9.5",
  "rayon",
  "regex",
@@ -8256,7 +8268,7 @@ dependencies = [
 [[package]]
 name = "terminusdb-store-prolog"
 version = "0.2.0"
-source = "git+https://github.com/ParapluOU/terminusdb.git?rev=20de473e93b977737bb59f6de4c463ffab5fa497#20de473e93b977737bb59f6de4c463ffab5fa497"
+source = "git+https://github.com/ParapluOU/terminusdb.git?rev=6e47baf5f2ed2be5d355ae65be1a3b7dd9b8672e#6e47baf5f2ed2be5d355ae65be1a3b7dd9b8672e"
 dependencies = [
  "base64 0.13.1",
  "chardetng",
@@ -8319,7 +8331,7 @@ dependencies = [
 [[package]]
 name = "terminusdb-webserver"
 version = "0.1.0"
-source = "git+https://github.com/ParapluOU/terminusdb.git?rev=20de473e93b977737bb59f6de4c463ffab5fa497#20de473e93b977737bb59f6de4c463ffab5fa497"
+source = "git+https://github.com/ParapluOU/terminusdb.git?rev=6e47baf5f2ed2be5d355ae65be1a3b7dd9b8672e#6e47baf5f2ed2be5d355ae65be1a3b7dd9b8672e"
 dependencies = [
  "axum 0.8.9",
  "flate2",

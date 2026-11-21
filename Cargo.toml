@@ -145,5 +145,18 @@ tdb-succinct = { git = "https://github.com/terminusdb-org/tdb-succinct", tag = "
 # terminusdb-org/terminusdb-store by git URL. Redirecting the SOURCE catches
 # both, including the grpc client, whose manifest lives in a repository we do
 # not control and therefore cannot edit.
+# Our own crates, reached back through the fork. terminusdb-community depends on
+# terminusdb-store-prolog, which depends on terminusdb-query-proof, which depends
+# on these four BY GIT — it has to, since a path out of that repository cannot be
+# resolved by anything consuming it as a git dependency. Without these patches
+# cargo builds a second copy of each from that revision, and the moment a type
+# from one meets a type from the other the error reads like a code bug rather
+# than the resolution bug it is. Same trap as terminus-store, same fix.
+[patch."https://github.com/ParapluOU/terminusdb-rs"]
+terminusdb-woql2 = { path = "crates/woql2" }
+terminusdb-woql-proof = { path = "crates/woql-proof" }
+terminusdb-schema = { path = "crates/schema" }
+terminusdb-schema-derive = { path = "crates/schema/derive" }
+
 [patch."https://github.com/terminusdb-org/terminusdb-store"]
 terminus-store = { git = "https://github.com/ParapluOU/terminusdb-store", branch = "parture-proof-of-woql" }
