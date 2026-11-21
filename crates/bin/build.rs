@@ -120,7 +120,7 @@ fn main() {
 
     // Resolve TerminusDB source directory.
     // Priority: TERMINUSDB_SOURCE env > sibling terminusdb submodule > git clone.
-    let (build_dir, should_cleanup) = if let Ok(source_path) = env::var("TERMINUSDB_SOURCE") {
+    let build_dir = if let Ok(source_path) = env::var("TERMINUSDB_SOURCE") {
         let source_dir = PathBuf::from(&source_path);
         if !source_dir.exists() {
             panic!("TERMINUSDB_SOURCE path does not exist: {}", source_path);
@@ -132,7 +132,7 @@ fn main() {
             );
         }
         println!("cargo:warning=Building from TERMINUSDB_SOURCE: {}", source_path);
-        (source_dir, false)
+        source_dir
     } else {
         // Check for sibling terminusdb submodule (e.g., modules/terminusdb alongside modules/terminusdb-rs)
         let workspace_root = PathBuf::from(&manifest_dir).join("../..");
@@ -148,7 +148,7 @@ fn main() {
                 "cargo:warning=Building from local submodule: {}",
                 dir.display()
             );
-            (dir, false)
+            dir
         } else {
             // Fall back to cloning from GitHub.
             // Pinned to the ParapluOU/terminusdb fork tag rebased onto upstream
@@ -158,17 +158,37 @@ fn main() {
                 .unwrap_or_else(|_| "v12.1.0-rc3-paraplu.1".to_string());
             println!("cargo:warning=Building TerminusDB version: {}", version);
 
-            let temp_dir = env::temp_dir().join("terminusdb-build");
+            // The clone is kept, and kept HERE rather than in the temp
+            // directory, because the server we build out of it keeps a
+            // reference to it.
+            //
+            // The binary is a SWI-Prolog saved state, and it resolves
+            // `load_foreign_library(foreign(librust))` against its build tree's
+            // **absolute path** at every startup. A tree that is gone — deleted
+            // after the build, or evicted because the temp directory was a
+            // tmpfs — leaves a binary that compiles, embeds and ships perfectly
+            // and then dies on every start with
+            //
+            //     librust: cannot open shared object file: No such file or directory
+            //
+            // which says nothing about where it came from. It used to be cloned
+            // to `env::temp_dir()/terminusdb-build` and deleted on the way out,
+            // so the self-provisioning path — the one a consumer gets with no
+            // environment variables set — reliably produced a server that could
+            // not start, and `TERMINUSDB_SOURCE` "fixed" it only by making the
+            // tree persist. Which checkout is built is this crate's business and
+            // nobody else's, so it keeps one.
+            let source_dir = deps_dir.join("terminusdb-src");
             println!(
                 "cargo:warning=Cloning TerminusDB to: {}",
-                temp_dir.display()
+                source_dir.display()
             );
 
-            if let Err(e) = clone_terminusdb(&version, &temp_dir) {
+            if let Err(e) = clone_terminusdb(&version, &source_dir) {
                 panic!("Failed to clone TerminusDB: {}", e);
             }
 
-            (temp_dir, true)
+            source_dir
         }
     };
 
@@ -235,9 +255,30 @@ fn main() {
         );
     }
 
-    // Clean up temp directory only if we cloned it
-    if should_cleanup {
-        let _ = fs::remove_dir_all(&build_dir);
+    // Nothing is cleaned up. The tree stays wherever it was resolved from,
+    // because the saved state we just built loads `librust` out of it by absolute
+    // path at every start (see where `build_dir` is chosen). There used to be a
+    // `should_cleanup` flag here that deleted a cloned tree; it is gone rather
+    // than set to false, so that restoring the deletion has to be a deliberate
+    // act rather than flipping a boolean.
+
+    // The coupling above, asserted rather than trusted: if the dylib is not
+    // beside the sources the server will look for it at, say so now — with the
+    // path and the reason — instead of shipping a binary that dies at startup
+    // with a message that names neither.
+    let dylib = build_dir.join("src").join("rust").join(if cfg!(target_os = "macos") {
+        "librust.dylib"
+    } else {
+        "librust.so"
+    });
+    if !dylib.exists() {
+        panic!(
+            "TerminusDB was built, but {} is missing. The server is a SWI-Prolog saved \
+             state and loads that file by this absolute path at every start, so the binary \
+             would fail with `librust: cannot open shared object file`. The build tree must \
+             survive the build and must not move.",
+            dylib.display()
+        );
     }
 
     println!(
