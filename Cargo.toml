@@ -126,7 +126,7 @@ codegen-units = 1
 # terminusdb-org, and then `GrpcLabelStore` implements THAT copy's `LabelStore`
 # and stops satisfying ours — the failure is a trait bound, not a version
 # conflict, so it reads like a code error rather than a resolution one.
-terminus-store = { git = "https://github.com/ParapluOU/terminusdb-store", branch = "parture-proof-of-woql" }
+terminus-store = { git = "https://github.com/ParapluOU/terminusdb-store", branch = "main" }
 # Use pure Rust rug shim for cross-compilation (replaces GMP-based rug)
 rug = { path = "crates/rug-shim" }
 # swipl-rs as pinned by v12.1.0-rc3 (terminusdb-org).
@@ -159,4 +159,4 @@ terminusdb-schema = { path = "crates/schema" }
 terminusdb-schema-derive = { path = "crates/schema/derive" }
 
 [patch."https://github.com/terminusdb-org/terminusdb-store"]
-terminus-store = { git = "https://github.com/ParapluOU/terminusdb-store", branch = "parture-proof-of-woql" }
+terminus-store = { git = "https://github.com/ParapluOU/terminusdb-store", branch = "main" }

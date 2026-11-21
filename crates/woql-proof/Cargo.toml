@@ -32,7 +32,9 @@ thiserror = { workspace = true }
 # Git dependencies on the two ParapluOU forks, not sibling paths: this
 # workspace has to build from a plain clone, which a `../../../dory` or
 # `../../../terminusdb-store-paraplu` path outside the repository cannot do.
-# The store's proof work lives on its `parture-proof-of-woql` branch (its
+# The store's proof work is on its `main` (that branch was fast-forwarded
+# into main once it became the only line anyone built; the old name is kept as
+# an alias at the same commit). Formerly `parture-proof-of-woql` (its
 # `main` carries none of it); the exact revisions are pinned by Cargo.lock. A
 # workspace that holds all three checked out patches these two sources back to
 # its local copies (see Parture's root manifest), so in-tree edits still apply
@@ -41,7 +43,7 @@ dory-pcs = { version = "0.4.2", git = "https://github.com/ParapluOU/dory", branc
 tdb-succinct = { version = "0.2" }
 # `proof` is opt-in in the store fork, so a consumer that only reads triples
 # compiles none of the Dory/Arkworks stack. This crate is the other kind.
-terminus-store = { git = "https://github.com/ParapluOU/terminusdb-store", branch = "parture-proof-of-woql", features = ["proof"] }
+terminus-store = { git = "https://github.com/ParapluOU/terminusdb-store", branch = "main", features = ["proof"] }
 
 # Exact PURE-RUST big rationals for the xsd:decimal/rational value layer (GMP-free so
 # the compiler stays cross-compilable / WASM-friendly).

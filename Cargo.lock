@@ -7719,7 +7719,7 @@ dependencies = [
 [[package]]
 name = "terminus-store"
 version = "0.23.1"
-source = "git+https://github.com/ParapluOU/terminusdb-store?branch=parture-proof-of-woql#e26e7c8573f8fc84981ae0e8b5ab9c5beca0b5fb"
+source = "git+https://github.com/ParapluOU/terminusdb-store?branch=main#e26e7c8573f8fc84981ae0e8b5ab9c5beca0b5fb"
 dependencies = [
  "ark-bn254",
  "ark-ec",
