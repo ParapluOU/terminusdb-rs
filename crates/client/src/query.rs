@@ -236,7 +236,9 @@ impl<T: TerminusDBModel + InstanceFromJson> InstanceQueryable for FilteredListMo
                         }
                         // Floats are emitted as decimals via their string form
                         XSDAnySimpleType::Float(f) => Value::Data(XSDAnySimpleType::Decimal(
-                            f.to_string().parse().expect("Invalid decimal string format"),
+                            f.to_string()
+                                .parse()
+                                .expect("Invalid decimal string format"),
                         )),
                         // String/Boolean/Integer/Decimal/DateTime/Date/Time pass
                         // through unchanged.

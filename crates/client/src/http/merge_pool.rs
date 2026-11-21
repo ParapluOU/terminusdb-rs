@@ -64,7 +64,7 @@ impl Default for MergePoolOptions {
 #[derive(Default)]
 struct Stats {
     submitted: AtomicUsize,
-    writing: AtomicUsize,         // gauge: writers currently inserting
+    writing: AtomicUsize,          // gauge: writers currently inserting
     queued_for_merge: AtomicUsize, // gauge: branches written, awaiting the merger
     merged: AtomicUsize,
     write_failed: AtomicUsize,

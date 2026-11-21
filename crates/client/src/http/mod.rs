@@ -79,7 +79,6 @@ pub use client::TerminusDBHttpClient;
 pub use concurrency_limiter::ConcurrencyLimitConfig;
 pub use diff::{DiffOptions, DiffResponse, PatchOperation};
 pub use document::DeleteOpts;
-pub use replace_all::ReplaceAllError;
 pub use graphql::{GraphQLError, GraphQLRequest, GraphQLResponse};
 pub use helpers::{
     dedup_documents_by_id, dedup_instances_by_id, dump_failed_payload, dump_json, dump_schema,
@@ -96,10 +95,11 @@ pub use organization::{
 };
 pub use prefix::PrefixResponse;
 pub use remote::{RemoteConfig, RemoteInfo};
+pub use replace_all::ReplaceAllError;
 pub use role::{Permission, Role};
-pub use terminusdb_schema::TerminusDBModel;
 #[cfg(not(target_arch = "wasm32"))]
 pub use subscription::SubscriptionEvent;
+pub use terminusdb_schema::TerminusDBModel;
 pub use url_builder::UrlBuilder;
 pub use user::User;
 pub use v12_1::{ChangesResponse, ClassFrameOptions, DocumentCountResponse};

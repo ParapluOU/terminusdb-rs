@@ -66,10 +66,7 @@ impl PartialEq for SubscriptionEvent {
             (Connected, Connected) | (Complete, Complete) => true,
             (Next(a), Next(b)) => a == b,
             (Errors(a), Errors(b)) => {
-                a.len() == b.len()
-                    && a.iter()
-                        .zip(b.iter())
-                        .all(|(x, y)| x.message == y.message)
+                a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.message == y.message)
             }
             _ => false,
         }
@@ -143,10 +140,10 @@ pub(crate) fn parse_sse_block(block: &str) -> anyhow::Result<Option<Subscription
             let payload: Value = serde_json::from_str(&data)
                 .with_context(|| format!("failed to parse a subscription payload: {data}"))?;
             if let Some(errors) = payload.get("errors").and_then(|e| e.as_array()) {
-                let errors: Vec<GraphQLError> = serde_json::from_value(Value::Array(
-                    errors.clone(),
-                ))
-                .with_context(|| format!("failed to parse subscription errors: {payload}"))?;
+                let errors: Vec<GraphQLError> =
+                    serde_json::from_value(Value::Array(errors.clone())).with_context(|| {
+                        format!("failed to parse subscription errors: {payload}")
+                    })?;
                 return Ok(Some(SubscriptionEvent::Errors(errors)));
             }
             Ok(Some(SubscriptionEvent::Next(payload)))
@@ -398,7 +395,10 @@ mod tests {
 
     #[test]
     fn finds_block_boundaries_in_both_line_endings() {
-        assert_eq!(find_block_end(b"event: next\ndata: 1\n\nrest"), Some((19, 21)));
+        assert_eq!(
+            find_block_end(b"event: next\ndata: 1\n\nrest"),
+            Some((19, 21))
+        );
         assert_eq!(
             find_block_end(b"event: next\r\ndata: 1\r\n\r\nrest"),
             Some((20, 24))

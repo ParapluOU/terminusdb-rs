@@ -1,4 +1,3 @@
-
 use crate::*;
 
 /// common methods for different targets

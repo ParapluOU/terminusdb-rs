@@ -1,252 +1,302 @@
+//! End-to-end roundtrip coverage for **nested models** — a document that links to
+//! other *separate* documents (graph edges / `Ref<T>`, not owned subdocuments),
+//! inserted and then read back so the nested models come inline.
+//!
+//! Shape: `Company --ceo/employees--> Person --address--> Address`, i.e. two levels
+//! of `Ref<T>` links. This complements `e2e_model_roundtrip.rs`, whose link case
+//! only checks that the *id* survives — here we assert the nested models' **fields**
+//! come back.
+//!
+//! ## What actually drives unfolding (TerminusDB v12)
+//!
+//! Expansion of a **linked** document is *schema-driven*, not forced by the API
+//! `unfold` flag. A `Ref<T>` field comes back inline only when the **target class**
+//! is `#[tdb(unfoldable = true)]` (`@unfoldable`) — or, in raw TerminusDB, when the
+//! property carries `@unfold: true` (field-level, which the derive does not yet
+//! emit). A link to a class with neither annotation stays a bare id reference even
+//! when `unfold=true` is requested. See `docs/terminusdb/document-unfolding-reference.md`.
+//!
+//! (This file was previously disabled: it used a since-removed `#[tdb(instance)]`
+//! field attribute and was walled off behind a never-enabled `#[cfg(feature = ...)]`,
+//! so it never compiled. Rewritten to the current `Ref<T>` idiom, corrected to the
+//! v12 unfolding semantics above, and run on the embedded `TerminusDBServer`.)
+
 #![recursion_limit = "256"]
+#![cfg(not(target_arch = "wasm32"))]
 
-// TODO: These tests require the #[tdb(instance)] feature which has trait implementation issues.
-// The Person and Company models with instance references don't properly implement ToTDBSchema.
-// This needs investigation into the schema derive macro.
-// DISABLED: The derive macros panic when encountering #[tdb(instance)] attribute.
-#[cfg(feature = "__disabled_test_unfold_typed_instances")]
-mod test_unfold_typed_instances_disabled {
-    use anyhow::Result;
-    use serde::{Deserialize, Serialize};
-    use terminusdb_bin::TerminusDBServer;
-    use terminusdb_client::*;
-    use terminusdb_schema::*;
-    use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
+use anyhow::Result;
+use terminusdb_bin::TerminusDBServer;
+use terminusdb_client::*;
+use terminusdb_schema::*;
+use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
-    // Define test models with relationships
-    #[derive(Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance)]
-    #[tdb(id_field = "id")]
-    struct Address {
-        id: EntityIDFor<Self>,
-        street: String,
-        city: String,
-        postal_code: String,
-    }
+// `@unfoldable`: references to an Address expand inline on retrieval.
+#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[tdb(id_field = "id", unfoldable = true)]
+struct Address {
+    id: EntityIDFor<Self>,
+    street: String,
+    city: String,
+    postal_code: String,
+}
 
-    #[derive(Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance)]
-    #[tdb(id_field = "id", unfoldable)]
-    struct Person {
-        id: EntityIDFor<Self>,
-        name: String,
-        age: i32,
-        #[tdb(instance)]
-        address: Option<Address>,
-    }
+// NOT unfoldable: references to a Department stay bare id references (contrast case).
+#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[tdb(id_field = "id")]
+struct Department {
+    id: EntityIDFor<Self>,
+    name: String,
+}
 
-    #[derive(Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance)]
-    #[tdb(id_field = "id")]
-    struct Company {
-        id: EntityIDFor<Self>,
-        name: String,
-        #[tdb(instance)]
-        ceo: Option<Person>,
-        #[tdb(instance)]
-        employees: Vec<Person>,
-    }
+// `@unfoldable`, and itself links to an (unfoldable) Address and a (non-unfoldable)
+// Department.
+#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[tdb(id_field = "id", unfoldable = true)]
+struct Person {
+    id: EntityIDFor<Self>,
+    name: String,
+    age: i32,
+    address: Option<Ref<Address>>,
+    department: Option<Ref<Department>>,
+}
 
-    async fn setup_test_data(client: &TerminusDBHttpClient, spec: &BranchSpec) -> Result<()> {
-        // Add schema
-        let args = DocumentInsertArgs::from(spec.clone());
-        client.insert_entity_schema::<Address>(args.clone()).await?;
-        client.insert_entity_schema::<Person>(args.clone()).await?;
-        client.insert_entity_schema::<Company>(args.clone()).await?;
+// NOT unfoldable; links to (unfoldable) Person documents.
+#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[tdb(id_field = "id")]
+struct Company {
+    id: EntityIDFor<Self>,
+    name: String,
+    ceo: Option<Ref<Person>>,
+    employees: Vec<Ref<Person>>,
+}
 
-        // Insert test data
-        let home_address = Address {
-            id: EntityIDFor::new("home").unwrap(),
-            street: "123 Main St".to_string(),
-            city: "Springfield".to_string(),
-            postal_code: "12345".to_string(),
-        };
+/// Insert the schemas and a small graph: two addresses, one department, two people
+/// (each linking an address; alice also linking the department), and a company
+/// whose CEO and employees link those people.
+async fn setup_test_data(client: &TerminusDBHttpClient, spec: &BranchSpec) -> Result<()> {
+    let args = DocumentInsertArgs::from(spec.clone());
+    client.insert_entity_schema::<Address>(args.clone()).await?;
+    client
+        .insert_entity_schema::<Department>(args.clone())
+        .await?;
+    client.insert_entity_schema::<Person>(args.clone()).await?;
+    client.insert_entity_schema::<Company>(args.clone()).await?;
 
-        let office_address = Address {
-            id: EntityIDFor::new("office").unwrap(),
-            street: "456 Business Ave".to_string(),
-            city: "Corporate City".to_string(),
-            postal_code: "67890".to_string(),
-        };
+    let home_address = Address {
+        id: EntityIDFor::new("home").unwrap(),
+        street: "123 Main St".to_string(),
+        city: "Springfield".to_string(),
+        postal_code: "12345".to_string(),
+    };
+    let office_address = Address {
+        id: EntityIDFor::new("office").unwrap(),
+        street: "456 Business Ave".to_string(),
+        city: "Corporate City".to_string(),
+        postal_code: "67890".to_string(),
+    };
+    let engineering = Department {
+        id: EntityIDFor::new("eng").unwrap(),
+        name: "Engineering".to_string(),
+    };
 
-        let alice = Person {
-            id: EntityIDFor::new("alice").unwrap(),
-            name: "Alice Smith".to_string(),
-            age: 30,
-            address: Some(home_address.clone()),
-        };
+    let alice = Person {
+        id: EntityIDFor::new("alice").unwrap(),
+        name: "Alice Smith".to_string(),
+        age: 30,
+        address: Some(Ref::from(EntityIDFor::<Address>::new("home").unwrap())),
+        department: Some(Ref::from(EntityIDFor::<Department>::new("eng").unwrap())),
+    };
+    let bob = Person {
+        id: EntityIDFor::new("bob").unwrap(),
+        name: "Bob Johnson".to_string(),
+        age: 35,
+        address: Some(Ref::from(EntityIDFor::<Address>::new("office").unwrap())),
+        department: None,
+    };
 
-        let bob = Person {
-            id: EntityIDFor::new("bob").unwrap(),
-            name: "Bob Johnson".to_string(),
-            age: 35,
-            address: Some(office_address.clone()),
-        };
+    let company = Company {
+        id: EntityIDFor::new("acme").unwrap(),
+        name: "ACME Corp".to_string(),
+        ceo: Some(Ref::from(EntityIDFor::<Person>::new("alice").unwrap())),
+        employees: vec![
+            Ref::from(EntityIDFor::<Person>::new("alice").unwrap()),
+            Ref::from(EntityIDFor::<Person>::new("bob").unwrap()),
+        ],
+    };
 
-        let company = Company {
-            id: EntityIDFor::new("acme").unwrap(),
-            name: "ACME Corp".to_string(),
-            ceo: Some(alice.clone()),
-            employees: vec![alice.clone(), bob.clone()],
-        };
+    client.insert_instance(&home_address, args.clone()).await?;
+    client
+        .insert_instance(&office_address, args.clone())
+        .await?;
+    client.insert_instance(&engineering, args.clone()).await?;
+    client.insert_instance(&alice, args.clone()).await?;
+    client.insert_instance(&bob, args.clone()).await?;
+    client.insert_instance(&company, args.clone()).await?;
 
-        let args = DocumentInsertArgs {
-            spec: spec.clone(),
-            author: "test".to_string(),
-            message: "Setup test data".to_string(),
-            ..Default::default()
-        };
+    Ok(())
+}
 
-        client.insert_instance(&home_address, args.clone()).await?;
-        client
-            .insert_instance(&office_address, args.clone())
-            .await?;
-        client.insert_instance(&alice, args.clone()).await?;
-        client.insert_instance(&bob, args.clone()).await?;
-        client.insert_instance(&company, args).await?;
+/// A `Ref<T>` to an `@unfoldable` class roundtrips its full nested data.
+#[tokio::test]
+async fn nested_link_roundtrips_when_target_is_unfoldable() -> Result<()> {
+    let server = TerminusDBServer::test_instance().await?;
+    server
+        .with_tmp_db("test_unfold_link", |client, spec| async move {
+            setup_test_data(&client, &spec).await?;
+            let mut de = DefaultTDBDeserializer;
 
-        Ok(())
-    }
+            let alice: Person = client.get_instance("alice", &spec, &mut de).await?;
 
-    #[tokio::test]
-    async fn test_get_instance_automatic_unfold() -> Result<()> {
-        let server = TerminusDBServer::test_instance().await?;
+            let address = alice.address.as_ref().expect("alice has an address link");
+            assert!(
+                address.is_loaded(),
+                "link to @unfoldable Address should come back inline"
+            );
+            let address = address.get_expect();
+            assert_eq!(address.id.id(), "home");
+            assert_eq!(address.street, "123 Main St");
+            assert_eq!(address.city, "Springfield");
+            assert_eq!(address.postal_code, "12345");
 
-        server
-            .with_tmp_db("test_unfold_auto", |client, spec| async move {
-                setup_test_data(&client, &spec).await?;
+            Ok(())
+        })
+        .await
+}
 
-                let mut deserializer = deserialize::DefaultTDBDeserializer;
+/// A `Ref<T>` to a class that is **not** `@unfoldable` stays a bare id reference,
+/// even though the read requests `unfold=true`. This is correct TerminusDB v12
+/// behavior — and the most likely cause of a "nested roundtrip is broken" report:
+/// the nested target class simply isn't marked `@unfoldable`.
+#[tokio::test]
+async fn link_to_non_unfoldable_class_stays_reference() -> Result<()> {
+    let server = TerminusDBServer::test_instance().await?;
+    server
+        .with_tmp_db("test_unfold_ref_only", |client, spec| async move {
+            setup_test_data(&client, &spec).await?;
+            let mut de = DefaultTDBDeserializer;
 
-                // Test automatic unfolding for Person (has @unfoldable attribute)
-                let person: Person = client
-                    .get_instance("alice", &spec, &mut deserializer)
-                    .await?;
+            // Unfolded read, but Department is not @unfoldable.
+            let alice: Person = client
+                .get_instance_unfolded("alice", &spec, &mut de)
+                .await?;
 
-                // Should have unfolded the address
-                assert!(person.address.is_some());
-                let address = person.address.unwrap();
-                assert_eq!(address.street, "123 Main St");
-                assert_eq!(address.city, "Springfield");
+            let dept = alice
+                .department
+                .as_ref()
+                .expect("alice has a department link");
+            assert!(
+                !dept.is_loaded(),
+                "link to non-@unfoldable Department must stay a bare reference"
+            );
+            assert_eq!(dept.id().id(), "eng");
 
-                Ok(())
-            })
-            .await
-    }
+            // The @unfoldable Address on the same document still unfolds.
+            assert!(alice.address.as_ref().unwrap().is_loaded());
 
-    #[tokio::test]
-    async fn test_get_instance_unfolded() -> Result<()> {
-        let server = TerminusDBServer::test_instance().await?;
+            Ok(())
+        })
+        .await
+}
 
-        server
-            .with_tmp_db("test_unfold_explicit", |client, spec| async move {
-                setup_test_data(&client, &spec).await?;
+/// Deep nested roundtrip across two link levels: Company -> Person -> Address.
+/// Company is not `@unfoldable`, so we unfold explicitly; Person and Address are,
+/// so both levels come back inline.
+#[tokio::test]
+async fn deep_nested_roundtrip_unfolds_all_levels() -> Result<()> {
+    let server = TerminusDBServer::test_instance().await?;
+    server
+        .with_tmp_db("test_unfold_deep", |client, spec| async move {
+            setup_test_data(&client, &spec).await?;
+            let mut de = DefaultTDBDeserializer;
 
-                let mut deserializer = deserialize::DefaultTDBDeserializer;
+            let company: Company = client.get_instance_unfolded("acme", &spec, &mut de).await?;
+            assert_eq!(company.name, "ACME Corp");
 
-                // Test explicit unfolding for Company (doesn't have @unfoldable attribute)
-                let company: Company = client
-                    .get_instance_unfolded("acme", &spec, &mut deserializer)
-                    .await?;
+            // Level 1: CEO link -> full Person.
+            let ceo = company.ceo.as_ref().expect("company has a CEO");
+            assert!(ceo.is_loaded(), "CEO link should be unfolded");
+            let ceo = ceo.get_expect();
+            assert_eq!(ceo.name, "Alice Smith");
+            assert_eq!(ceo.age, 30);
 
-                // Should have unfolded the CEO and employees
-                assert!(company.ceo.is_some());
-                let ceo = company.ceo.unwrap();
-                assert_eq!(ceo.name, "Alice Smith");
+            // Level 2: the CEO's own address link -> full Address.
+            let ceo_address = ceo.address.as_ref().expect("CEO has an address link");
+            assert!(
+                ceo_address.is_loaded(),
+                "nested CEO address should be unfolded (deep unfold)"
+            );
+            assert_eq!(ceo_address.get_expect().street, "123 Main St");
 
-                // CEO's address should also be unfolded
-                assert!(ceo.address.is_some());
-                assert_eq!(ceo.address.unwrap().street, "123 Main St");
+            // Vec of links: employees all unfolded.
+            assert_eq!(company.employees.len(), 2);
+            assert!(
+                company.employees.iter().all(|e| e.is_loaded()),
+                "all employee links should be unfolded"
+            );
+            let mut names: Vec<&str> = company
+                .employees
+                .iter()
+                .map(|e| e.get_expect().name.as_str())
+                .collect();
+            names.sort();
+            assert_eq!(names, vec!["Alice Smith", "Bob Johnson"]);
 
-                // Employees should be unfolded
-                assert_eq!(company.employees.len(), 2);
-                assert_eq!(company.employees[0].name, "Alice Smith");
-                assert_eq!(company.employees[1].name, "Bob Johnson");
+            Ok(())
+        })
+        .await
+}
 
-                Ok(())
-            })
-            .await
-    }
+/// Bulk retrieval unfolds nested links for every returned document.
+#[tokio::test]
+async fn bulk_get_unfolds_nested_links() -> Result<()> {
+    let server = TerminusDBServer::test_instance().await?;
+    server
+        .with_tmp_db("test_unfold_bulk", |client, spec| async move {
+            setup_test_data(&client, &spec).await?;
+            let mut de = DefaultTDBDeserializer;
 
-    #[tokio::test]
-    async fn test_get_instance_with_opts_no_unfold() -> Result<()> {
-        let server = TerminusDBServer::test_instance().await?;
+            let ids = vec!["alice".to_string(), "bob".to_string()];
+            let people: Vec<Person> = client.get_instances_unfolded(ids, &spec, &mut de).await?;
 
-        server
-            .with_tmp_db("test_unfold_opts", |client, spec| async move {
-                setup_test_data(&client, &spec).await?;
+            assert_eq!(people.len(), 2);
+            for person in &people {
+                let address = person.address.as_ref().expect("person has an address link");
+                assert!(address.is_loaded(), "each address should be unfolded");
+                let address = address.get_expect();
+                assert!(!address.street.is_empty());
+                assert!(!address.city.is_empty());
+            }
 
-                let mut deserializer = deserialize::DefaultTDBDeserializer;
+            Ok(())
+        })
+        .await
+}
 
-                // Test disabling unfold even for models with @unfoldable
-                let opts = GetOpts::default().with_unfold(false);
-                let person: Person = client
-                    .get_instance_with_opts("alice", &spec, opts, &mut deserializer)
-                    .await?;
+/// Type-filtered, paginated, unfolded bulk retrieval.
+#[tokio::test]
+async fn pagination_with_unfold_and_type_filter() -> Result<()> {
+    let server = TerminusDBServer::test_instance().await?;
+    server
+        .with_tmp_db("test_unfold_pagination", |client, spec| async move {
+            setup_test_data(&client, &spec).await?;
+            let mut de = DefaultTDBDeserializer;
 
-                // Address should not be unfolded (will be a reference or None depending on implementation)
-                // This test might need adjustment based on actual behavior
-                assert_eq!(person.name, "Alice Smith");
+            let empty_ids: Vec<String> = vec![];
+            let opts = GetOpts::filtered_by_type::<Person>()
+                .with_count(1)
+                .with_unfold(true);
+            let people: Vec<Person> = client
+                .get_instances_with_opts(empty_ids, &spec, opts, &mut de)
+                .await?;
 
-                Ok(())
-            })
-            .await
-    }
+            assert_eq!(people.len(), 1);
+            let address = people[0]
+                .address
+                .as_ref()
+                .expect("person has an address link");
+            assert!(address.is_loaded(), "address should be unfolded");
 
-    #[tokio::test]
-    async fn test_get_instances_unfolded() -> Result<()> {
-        let server = TerminusDBServer::test_instance().await?;
-
-        server
-            .with_tmp_db("test_unfold_multi", |client, spec| async move {
-                setup_test_data(&client, &spec).await?;
-
-                let mut deserializer = deserialize::DefaultTDBDeserializer;
-
-                // Test bulk retrieval with unfolding
-                let ids = vec!["alice".to_string(), "bob".to_string()];
-                let people: Vec<Person> = client
-                    .get_instances_unfolded(ids, &spec, &mut deserializer)
-                    .await?;
-
-                assert_eq!(people.len(), 2);
-
-                // Both should have unfolded addresses
-                for person in &people {
-                    assert!(person.address.is_some());
-                    let address = person.address.as_ref().unwrap();
-                    assert!(!address.street.is_empty());
-                    assert!(!address.city.is_empty());
-                }
-
-                Ok(())
-            })
-            .await
-    }
-
-    #[tokio::test]
-    async fn test_get_instances_with_opts_pagination() -> Result<()> {
-        let server = TerminusDBServer::test_instance().await?;
-
-        server
-            .with_tmp_db("test_unfold_pagination", |client, spec| async move {
-                setup_test_data(&client, &spec).await?;
-
-                let mut deserializer = deserialize::DefaultTDBDeserializer;
-
-                // Test pagination with type filtering
-                let empty_ids = vec![];
-                let opts = GetOpts::filtered_by_type::<Person>()
-                    .with_count(1)
-                    .with_unfold(true);
-
-                let people: Vec<Person> = client
-                    .get_instances_with_opts(empty_ids, &spec, opts, &mut deserializer)
-                    .await?;
-
-                // Should get only 1 person due to count limit
-                assert_eq!(people.len(), 1);
-                assert!(people[0].address.is_some());
-
-                Ok(())
-            })
-            .await
-    }
+            Ok(())
+        })
+        .await
 }

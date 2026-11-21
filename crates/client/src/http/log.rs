@@ -9,9 +9,7 @@ use {
     anyhow::Context,
     serde::Deserialize,
     terminusdb_schema::{GraphType, ToJson, ToTDBInstance},
-    terminusdb_woql2::prelude::{
-        AddedTriple, Limit, NodeValue, Query as Woql2Query, Using, Value,
-    },
+    terminusdb_woql2::prelude::{AddedTriple, Limit, NodeValue, Query as Woql2Query, Using, Value},
 };
 
 use super::TerminusDBModel;

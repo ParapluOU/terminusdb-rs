@@ -345,8 +345,9 @@ impl super::client::TerminusDBHttpClient {
         document_id: &str,
         spec: &BranchSpec,
         params: Option<crate::document::DocumentHistoryParams>,
-    ) -> anyhow::Result<impl futures_util::Stream<Item = anyhow::Result<crate::document::CommitHistoryEntry>>>
-    {
+    ) -> anyhow::Result<
+        impl futures_util::Stream<Item = anyhow::Result<crate::document::CommitHistoryEntry>>,
+    > {
         use futures_util::StreamExt;
 
         let params = params.unwrap_or_default();

@@ -75,7 +75,10 @@ impl super::client::TerminusDBHttpClient {
         if let Some(timeout) = args.timeout {
             request = request.timeout(timeout);
         }
-        let response = request.send().await.context("the replace request was not answered")?;
+        let response = request
+            .send()
+            .await
+            .context("the replace request was not answered")?;
 
         let status = response.status();
         let data_version = match response.headers().get(DATA_VERSION_HEADER) {
@@ -87,7 +90,10 @@ impl super::client::TerminusDBHttpClient {
             ),
             None => None,
         };
-        let text = response.text().await.context("the answer to the replace request could not be read")?;
+        let text = response
+            .text()
+            .await
+            .context("the answer to the replace request could not be read")?;
 
         if !status.is_success() {
             // An answer that is not JSON is reported as it came.
@@ -97,7 +103,9 @@ impl super::client::TerminusDBHttpClient {
                     let said = |key: &str| -> Result<String, ReplaceAllError> {
                         Ok(error[key]
                             .as_str()
-                            .with_context(|| format!("a data version mismatch without `{key}`: {text}"))?
+                            .with_context(|| {
+                                format!("a data version mismatch without `{key}`: {text}")
+                            })?
                             .to_string())
                     };
                     return Err(ReplaceAllError::HeadMoved {
@@ -106,11 +114,14 @@ impl super::client::TerminusDBHttpClient {
                     });
                 }
             }
-            return Err(anyhow::anyhow!("replacing the documents failed ({status}): {text}").into());
+            return Err(
+                anyhow::anyhow!("replacing the documents failed ({status}): {text}").into(),
+            );
         }
 
-        let data_version = data_version
-            .with_context(|| format!("the server replaced the documents but named no commit ({status}): {text}"))?;
+        let data_version = data_version.with_context(|| {
+            format!("the server replaced the documents but named no commit ({status}): {text}")
+        })?;
         let commit = data_version
             .strip_prefix("branch:")
             .with_context(|| format!("the data version `{data_version}` is not a branch's"))?;

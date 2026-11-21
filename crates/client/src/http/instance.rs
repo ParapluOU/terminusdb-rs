@@ -1,9 +1,6 @@
 //! Strongly-typed instance operations
 
-use super::{
-    helpers::format_id,
-    TerminusDBModel,
-};
+use super::{helpers::format_id, TerminusDBModel};
 use crate::{CommitId, DefaultTDBDeserializer};
 use {
     crate::{
@@ -21,8 +18,7 @@ use {
     std::{collections::HashMap, time::Instant},
     terminusdb_schema::GraphType,
     terminusdb_schema::{
-        EntityIDFor, FromTDBInstance, InstanceFromJson, ToJson, ToTDBInstance,
-        ToTDBInstances,
+        EntityIDFor, FromTDBInstance, InstanceFromJson, ToJson, ToTDBInstance, ToTDBInstances,
     },
     terminusdb_woql2::prelude::{AddedTriple, Limit, NodeValue, Query, Using, Value},
 };

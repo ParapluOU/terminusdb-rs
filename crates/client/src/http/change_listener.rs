@@ -1108,7 +1108,6 @@ impl ChangeListenerInner {
 
 #[cfg(test)]
 mod tests {
-    
 
     // Note: Full integration tests require a running TerminusDB instance
     // with the changeset SSE plugin enabled
