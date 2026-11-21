@@ -91,8 +91,10 @@ exactly like one that does, except for the bill.
 ```
 
 The macro fills in the name (the struct's own) and the params hash (from
-`Serialize`, through `serde_json::Value` so a `HashMap` field does not depend on
-iteration order). The epoch is the one thing the dependency graph cannot see,
+`Serialize`, through a canonical encoding that sorts object keys explicitly, so
+a `HashMap` field does not depend on iteration order — `serde_json`'s own
+ordering cannot be relied on, since `preserve_order` is enabled somewhere in
+this workspace and cargo unifies features across a build). The epoch is the one thing the dependency graph cannot see,
 because it is a change to the *function* rather than to the data:
 
 - **`EpochPolicy::Deploy(build_id)`** — the default, from

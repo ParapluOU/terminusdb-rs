@@ -83,8 +83,70 @@ impl Default for EpochPolicy {
 /// the prototype this replaces used for keys, is explicitly not a stable format:
 /// a field reorder or a tightened `Debug` impl silently re-keys every entry.)
 pub fn params_hash<T: Serialize + ?Sized>(params: &T) -> anyhow::Result<String> {
-    let canonical = serde_json::to_vec(&serde_json::to_value(params)?)?;
+    let mut canonical = Vec::new();
+    write_canonical(&serde_json::to_value(params)?, &mut canonical);
     Ok(blake3::hash(&canonical).to_hex()[..16].to_owned())
+}
+
+/// Write a value in a form that depends on its content and nothing else.
+///
+/// This used to be `serde_json::to_vec`, on the assumption that `Map` sorts its
+/// keys. It does — until something in the build turns on
+/// `serde_json/preserve_order`, which makes `Map` an insertion-ordered
+/// `IndexMap`. `crates/gql` turns it on, and cargo unifies features across a
+/// build graph, so a key computed in a process that links gql ordered a map by
+/// whatever the hasher felt like. `HashMap` randomises that per process, so the
+/// same parameters hashed differently in two processes: not a wrong answer, but
+/// a cache that never hits across processes and silently recomputes forever.
+///
+/// Keys are therefore sorted here rather than trusted to be sorted. Every
+/// string is length-prefixed and every composite tagged, so the encoding is
+/// injective — without that, `{"a":"b"}` and `{"ab":""}` could flatten to the
+/// same bytes, and for a cache key a collision is not a miss, it is the wrong
+/// value served under the right name.
+fn write_canonical(value: &serde_json::Value, out: &mut Vec<u8>) {
+    use serde_json::Value;
+    match value {
+        Value::Null => out.push(b'0'),
+        Value::Bool(false) => out.push(b'f'),
+        Value::Bool(true) => out.push(b't'),
+        Value::Number(number) => {
+            // `arbitrary_precision` is on workspace-wide, so a Number holds its
+            // original lexical form; that is exactly what should be hashed, and
+            // it keeps 1 distinct from 1.0 as the parameters distinguish them.
+            out.push(b'#');
+            write_bytes(number.to_string().as_bytes(), out);
+        }
+        Value::String(text) => {
+            out.push(b'"');
+            write_bytes(text.as_bytes(), out);
+        }
+        Value::Array(items) => {
+            out.push(b'[');
+            out.extend_from_slice(&(items.len() as u64).to_le_bytes());
+            for item in items {
+                write_canonical(item, out);
+            }
+        }
+        Value::Object(fields) => {
+            out.push(b'{');
+            out.extend_from_slice(&(fields.len() as u64).to_le_bytes());
+            let mut keys: Vec<&String> = fields.keys().collect();
+            keys.sort_unstable();
+            for key in keys {
+                write_bytes(key.as_bytes(), out);
+                // `keys` came from `fields`, so this cannot be absent.
+                if let Some(field) = fields.get(key) {
+                    write_canonical(field, out);
+                }
+            }
+        }
+    }
+}
+
+fn write_bytes(bytes: &[u8], out: &mut Vec<u8>) {
+    out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    out.extend_from_slice(bytes);
 }
 
 /// Compose `name/params/epoch`.
@@ -136,9 +198,25 @@ mod tests {
 
     #[test]
     fn a_map_field_does_not_depend_on_iteration_order() {
-        // The bug this guards: a `HashMap` serialized directly comes out in
-        // whatever order the hasher felt like, so the key would differ between
-        // two processes computing the same thing.
+        // Two HashMaps with the same keys iterate identically inside one
+        // process — RandomState is per process, not per map — so comparing
+        // them proves nothing. What has to hold is that the ENCODING ignores
+        // key order, which is testable directly by building the two orders by
+        // hand. This is the test that fails when `serde_json/preserve_order`
+        // is in the build and `Map` stops sorting for us.
+        let mut ascending = serde_json::Map::new();
+        ascending.insert("a".to_owned(), serde_json::json!(1));
+        ascending.insert("b".to_owned(), serde_json::json!(2));
+        let mut descending = serde_json::Map::new();
+        descending.insert("b".to_owned(), serde_json::json!(2));
+        descending.insert("a".to_owned(), serde_json::json!(1));
+        assert_eq!(
+            params_hash(&serde_json::Value::Object(ascending)).unwrap(),
+            params_hash(&serde_json::Value::Object(descending)).unwrap(),
+        );
+
+        // And a map reached through an ordinary struct field, which is how a
+        // derivation's parameters actually arrive.
         let mut one = HashMap::new();
         one.insert("b".to_owned(), 2);
         one.insert("a".to_owned(), 1);
@@ -146,6 +224,50 @@ mod tests {
         other.insert("a".to_owned(), 1);
         other.insert("b".to_owned(), 2);
         assert_eq!(params_hash(&one).unwrap(), params_hash(&other).unwrap());
+    }
+
+    #[test]
+    fn nested_maps_are_canonical_too() {
+        // Sorting only the top level would leave the bug one level down.
+        let nested = |first: &str, second: &str| {
+            let mut inner = serde_json::Map::new();
+            inner.insert(first.to_owned(), serde_json::json!(first));
+            inner.insert(second.to_owned(), serde_json::json!(second));
+            let mut outer = serde_json::Map::new();
+            outer.insert("inner".to_owned(), serde_json::Value::Object(inner));
+            outer.insert("tail".to_owned(), serde_json::json!([1, 2]));
+            serde_json::Value::Object(outer)
+        };
+        assert_eq!(
+            params_hash(&nested("x", "y")).unwrap(),
+            params_hash(&nested("y", "x")).unwrap()
+        );
+    }
+
+    #[test]
+    fn structurally_different_parameters_cannot_collide() {
+        // Length prefixing is what stops concatenation ambiguity: without it
+        // {"a":"b"} and {"ab":""} encode to the same bytes, and a cache-key
+        // collision serves the wrong value rather than merely missing.
+        let one = serde_json::json!({"a": "b"});
+        let other = serde_json::json!({"ab": ""});
+        assert_ne!(params_hash(&one).unwrap(), params_hash(&other).unwrap());
+
+        // A string and a one-element array of it are different parameters.
+        assert_ne!(
+            params_hash(&serde_json::json!("a")).unwrap(),
+            params_hash(&serde_json::json!(["a"])).unwrap()
+        );
+        // So are a number and its lexical form.
+        assert_ne!(
+            params_hash(&serde_json::json!(1)).unwrap(),
+            params_hash(&serde_json::json!("1")).unwrap()
+        );
+        // And an absent field is not an explicit null.
+        assert_ne!(
+            params_hash(&serde_json::json!({})).unwrap(),
+            params_hash(&serde_json::json!({"a": null})).unwrap()
+        );
     }
 
     #[test]
