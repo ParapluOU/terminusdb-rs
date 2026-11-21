@@ -102,6 +102,20 @@ auth_ttl_secs = 30
 #   "subscription" - _ChangeSet over SSE. Low latency; needs a local commit path.
 #   "both"         - subscription for latency, poll as the liveness backstop.
 #                    The default, and the right answer when unsure.
+#   "difflog"      - read the server's per-commit diff log at
+#                    /api/graphql/_difflog/<org>/<db>. Better than "poll"
+#                    wherever the server has it, and not mainly for speed: a
+#                    head poll only ever learns "the head is now X", so each
+#                    event costs a log walk to find out what happened in
+#                    between, and /api/log is O(depth) — 467ms at depth 261,
+#                    growing. The feed hands over every intervening commit in
+#                    order WITH its parent, so there is no gap to reconcile,
+#                    and a poll with nothing to report opens no layer and
+#                    reads no triple. A rewritten history (reset, rebase)
+#                    comes back as a reported discontinuity instead of a head
+#                    that appears to move backwards.
+#                    Opt-in because it needs a server carrying the feed;
+#                    against an older node every poll fails and backs off.
 driver = "both"
 poll_interval_ms = 150
 # Interval for a namespace nothing has read for idle_after_ms.

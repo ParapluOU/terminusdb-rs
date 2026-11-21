@@ -16,11 +16,13 @@
 //!   safe even when its view of the filesystem is strange: capture lag then
 //!   costs staleness, never correctness.
 
+pub mod difflog;
 pub mod headpoll;
 mod resolve;
 pub mod subscription;
 
-pub use headpoll::HeadPoll;
+pub use difflog::DiffLog;
+pub use headpoll::{HeadPoll, Interval};
 pub use resolve::{PinnedReadGate, TerminusHistory, TerminusResolver};
 pub use subscription::{changeset_query, ChangeSetSubscription};
 
@@ -936,6 +938,11 @@ pub enum CaptureHint {
 pub struct Supervisor {
     engine: Arc<Engine>,
     client: Arc<terminusdb_client::TerminusDBHttpClient>,
+    /// Plain HTTP for surfaces the typed client does not model — currently the
+    /// diff-log feed, which is a GraphQL endpoint at a path of its own. Built
+    /// once: a `reqwest::Client` is a connection pool, and the stream-rebuild
+    /// loop would otherwise make a new one per resubscribe.
+    http: reqwest::Client,
     config: Arc<crate::config::Config>,
     /// Which namespaces have a capture task, so registration can be idempotent.
     running: dashmap::DashSet<Namespace>,
@@ -956,6 +963,7 @@ impl Supervisor {
         Self {
             engine,
             client,
+            http: reqwest::Client::new(),
             config,
             running: dashmap::DashSet::new(),
             registry,
@@ -1156,6 +1164,33 @@ impl Supervisor {
                     Arc::new(move || supervisor.poll_interval(&polled)),
                 );
                 sources.push(poll.subscribe(&ns, after.clone()));
+            }
+            if driver.reads_diff_log() {
+                // One source, and it supplies parents — so unlike the head
+                // poll it needs no reconciling walk behind it.
+                let supervisor = Arc::clone(&self);
+                let watched = ns.clone();
+                match url::Url::parse(&self.config.upstream.url) {
+                    Ok(upstream) => {
+                        let feed = difflog::DiffLog::new(
+                            self.http.clone(),
+                            upstream,
+                            &self.config.upstream.user,
+                            &self.config.upstream.pass,
+                            Arc::new(move || supervisor.poll_interval(&watched)),
+                        );
+                        sources.push(feed.subscribe(&ns, after.clone()));
+                    }
+                    Err(error) => {
+                        // Startup validates this, so reaching here means the
+                        // configuration changed under us. Say so rather than
+                        // leaving the namespace silently undriven.
+                        tracing::error!(
+                            %ns, error = %error,
+                            "upstream url is unparseable; the diff-log driver cannot start"
+                        );
+                    }
+                }
             }
             if want_subscription {
                 let sub = subscription::ChangeSetSubscription::new(

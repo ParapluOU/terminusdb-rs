@@ -293,6 +293,22 @@ pub enum Driver {
     /// and the right answer when unsure.
     #[default]
     Both,
+    /// Read the server's per-commit diff log
+    /// (`/api/graphql/_difflog/<org>/<db>`).
+    ///
+    /// Strictly better than `poll` where the server has it, and the reason is
+    /// not speed but shape: a head poll learns only "the head is now X", so
+    /// every event costs the applier a log walk to discover what happened in
+    /// between, and `/api/log` is `O(depth)`. The feed yields every intervening
+    /// commit in order WITH its parent, so there is no gap to reconcile, and a
+    /// poll with nothing to report opens no layer and touches no triple.
+    /// History rewrites arrive as a reported discontinuity rather than a head
+    /// that mysteriously went backwards.
+    ///
+    /// Requires a server carrying the feed; against an older node every poll
+    /// fails and backs off, which is why this is opt-in rather than the
+    /// default.
+    DiffLog,
 }
 
 impl Driver {
@@ -304,6 +320,11 @@ impl Driver {
     /// True when this driver subscribes.
     pub fn subscribes(self) -> bool {
         matches!(self, Driver::Subscription | Driver::Both)
+    }
+
+    /// True when this driver reads the diff log.
+    pub fn reads_diff_log(self) -> bool {
+        matches!(self, Driver::DiffLog)
     }
 }
 
@@ -859,6 +880,11 @@ mod tests {
         assert!(Driver::Poll.polls() && !Driver::Poll.subscribes());
         assert!(Driver::Subscription.subscribes() && !Driver::Subscription.polls());
         assert!(Driver::Both.polls() && Driver::Both.subscribes());
+        // The diff log is its own driver, not a flavour of polling: it carries
+        // parents, so the applier must not also be fed headless events.
+        assert!(Driver::DiffLog.reads_diff_log());
+        assert!(!Driver::DiffLog.polls() && !Driver::DiffLog.subscribes());
+        assert!(!Driver::Poll.reads_diff_log() && !Driver::Both.reads_diff_log());
         assert!(Config::from_toml("[capture]\ndriver = \"sometimes\"").is_err());
     }
 
