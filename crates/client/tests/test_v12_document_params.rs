@@ -3,6 +3,10 @@
 //! (insert unstructured `sys:JSONDocument` with no schema check) round-trips
 //! against a 12.1 server.
 
+// Reads documents as raw JSON on purpose: these tests assert what the *server*
+// stored and returned, which is the one question a typed getter cannot answer.
+#![allow(deprecated)]
+
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {
@@ -36,7 +40,10 @@ mod tests {
                     )
                     .await?;
 
-                eprintln!("raw_json read-back: {}", serde_json::to_string_pretty(&got)?);
+                eprintln!(
+                    "raw_json read-back: {}",
+                    serde_json::to_string_pretty(&got)?
+                );
                 // Top-level fields round-trip through the unstructured store.
                 assert_eq!(got.get("name").and_then(|v| v.as_str()), Some("Gadget"));
                 assert!(got.get("tags").is_some(), "tags array should survive");

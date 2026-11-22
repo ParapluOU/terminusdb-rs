@@ -321,6 +321,13 @@ impl BranchClient {
     }
 
     /// Get a document by ID
+    #[deprecated(
+        note = "returns untyped `serde_json::Value` and loses the schema typing that \
+    makes this client worth using; prefer `get_instance`, which deserializes straight into \
+    your `TerminusDBModel`. If you genuinely want raw JSON, add `#[allow(deprecated)]` \
+    at the call site to say so deliberately."
+    )]
+    #[allow(deprecated)] // the body *is* the forwarding call
     pub async fn get_document(
         &self,
         doc_id: &str,
@@ -332,6 +339,13 @@ impl BranchClient {
     }
 
     /// Get a document with response headers
+    #[deprecated(
+        note = "returns untyped `serde_json::Value` and loses the schema typing that \
+    makes this client worth using; prefer `get_instance_with_headers`, which deserializes straight into \
+    your `TerminusDBModel`. If you genuinely want raw JSON, add `#[allow(deprecated)]` \
+    at the call site to say so deliberately."
+    )]
+    #[allow(deprecated)] // the body *is* the forwarding call
     pub async fn get_document_with_headers(
         &self,
         doc_id: &str,

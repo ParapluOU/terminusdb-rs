@@ -143,6 +143,7 @@ impl super::client::TerminusDBHttpClient {
             id = %id
         )
     )]
+    #[allow(deprecated)] // an existence check has no type to ask for
     pub async fn has_document(
         &self, // number only, no schema class prefix
         id: &str,
@@ -150,6 +151,8 @@ impl super::client::TerminusDBHttpClient {
     ) -> bool {
         // Use get_document_if_exists to avoid error logging for expected "not found" cases
         match self
+            // Built on the raw getter; that is why the raw one is deprecated
+            // rather than removed.
             .get_document_if_exists(id, spec, GetOpts::default())
             .await
         {
@@ -202,15 +205,21 @@ impl super::client::TerminusDBHttpClient {
         ),
         err
     )]
+    #[deprecated(
+        note = "returns untyped `serde_json::Value` and loses the schema typing that \
+    makes this client worth using; prefer `get_instance`, which deserializes straight into \
+    your `TerminusDBModel`. If you genuinely want raw JSON, add `#[allow(deprecated)]` \
+    at the call site to say so deliberately."
+    )]
     pub async fn get_document(
         &self, // number only, no schema class prefix
         id: &str,
         spec: &BranchSpec,
         opts: GetOpts,
     ) -> anyhow::Result<serde_json::Value> {
-        self.get_document_if_exists(id, spec, opts)
-            .await?
-            .ok_or_else(|| anyhow!("document #{} does not exist", id))
+        #[allow(deprecated)]
+        let found = self.get_document_if_exists(id, spec, opts).await?;
+        found.ok_or_else(|| anyhow!("document #{} does not exist", id))
     }
 
     /// Retrieves a single untyped document from the database and returns both the document and commit ID.
@@ -247,6 +256,12 @@ impl super::client::TerminusDBHttpClient {
             as_list = opts.as_list
         ),
         err
+    )]
+    #[deprecated(
+        note = "returns untyped `serde_json::Value` and loses the schema typing that \
+    makes this client worth using; prefer `get_instance_with_headers`, which deserializes straight into \
+    your `TerminusDBModel`. If you genuinely want raw JSON, add `#[allow(deprecated)]` \
+    at the call site to say so deliberately."
     )]
     pub async fn get_document_with_headers(
         &self,
@@ -320,6 +335,12 @@ impl super::client::TerminusDBHttpClient {
             as_list = opts.as_list
         )
         // Note: no 'err' attribute - we don't want to log DocumentNotFound as errors
+    )]
+    #[deprecated(
+        note = "returns untyped `serde_json::Value` and loses the schema typing that \
+    makes this client worth using; prefer `get_instance_if_exists`, which deserializes straight into \
+    your `TerminusDBModel`. If you genuinely want raw JSON, add `#[allow(deprecated)]` \
+    at the call site to say so deliberately."
     )]
     pub async fn get_document_if_exists(
         &self,

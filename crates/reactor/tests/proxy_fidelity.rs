@@ -15,6 +15,10 @@
 //! `xsd:decimal`, fewer digits. Comparing bytes — not parsed values — is what
 //! makes invariant 1 testable rather than aspirational.
 
+//! Raw document reads throughout: byte fidelity against the origin is the
+//! subject, so the untyped getters are the right ones here.
+#![allow(deprecated)]
+
 mod common;
 
 use anyhow::Result;

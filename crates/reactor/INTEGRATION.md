@@ -199,9 +199,10 @@ derivation! {
         // An ordinary read through an ordinary client — but `scope.client()`,
         // which pins it at the scope's commit and has Reactor record what it
         // depended on.
-        let publication = scope
+        let mut de = DefaultTDBDeserializer;
+        let publication: Publication = scope
             .client()
-            .get_document(&this.id, scope.spec(), GetOpts::default())
+            .get_instance(&this.id, scope.spec(), &mut de)
             .await?;
         Ok(render(&publication, this.limit))   // your code; Reactor never sees it
     }

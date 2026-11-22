@@ -13,6 +13,9 @@
 
 #![recursion_limit = "256"]
 #![cfg(not(target_arch = "wasm32"))]
+// Reads documents as raw JSON on purpose: these tests assert what the *server*
+// stored and returned, which is the one question a typed getter cannot answer.
+#![allow(deprecated)]
 
 use anyhow::Result;
 use terminusdb_bin::TerminusDBServer;

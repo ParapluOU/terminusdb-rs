@@ -1,4 +1,7 @@
 #![recursion_limit = "256"]
+// Reads documents as raw JSON on purpose: these tests assert what the *server*
+// stored and returned, which is the one question a typed getter cannot answer.
+#![allow(deprecated)]
 
 // Integration tests for TerminusDB client
 // Uses TerminusDBServer::test_instance() for auto-spawning local server
@@ -22,10 +25,10 @@ fn new_test_schema(id: &str) -> Schema {
             name: "test_prop".to_string(),
             class: terminusdb_schema::UNIT.to_string(),
             r#type: None,
-        unfold: false,
+            unfold: false,
         }],
         unfoldable: true,
-    shared: false,
+        shared: false,
     }
 }
 
@@ -191,9 +194,9 @@ fn test_deserde_404() {
 }
 
 // Make sure imports are correct for integration tests
- // Add for async test return types
- // Keep module path import
- // Keep module path import
+// Add for async test return types
+// Keep module path import
+// Keep module path import
 use terminusdb_client::{
     // Imports from the client crate
     // Ensure these are included and uncommented
@@ -207,7 +210,7 @@ use terminusdb_client::{
     // TypedErrorResponse, // Removed - Use module path import above
     // Info, // Removed - Use module path import above
 };
- // Needed for QueryResult deserialization // Assuming ApiResponse::Error uses this
+// Needed for QueryResult deserialization // Assuming ApiResponse::Error uses this
 
 use terminusdb_schema_derive::TerminusDBModel;
 
