@@ -133,6 +133,7 @@ mod http;
 pub mod key;
 mod macros;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -345,9 +346,45 @@ impl Cache {
         spec: &BranchSpec,
         derivation: D,
     ) -> anyhow::Result<(D::Output, Outcome)> {
+        self.get_reported_after(spec, derivation, None).await
+    }
+
+    /// As [`Cache::get`], but refuse to answer from a snapshot older than
+    /// `after`.
+    ///
+    /// Read-your-writes for a derived value. A computation pins itself at one
+    /// commit before its first read, so a fence on the *reads* comes too late:
+    /// by then the stale snapshot has already been chosen. This demands the
+    /// freshness at the latch instead, and Reactor waits (up to
+    /// `[consistency].min_version_wait_ms`) for its watermark to reach the
+    /// commit — erroring rather than quietly handing back an older pin.
+    ///
+    /// The commit to pass is the one a write returned, which
+    /// `insert_instance_with_commit_id` already gives you. It composes across
+    /// databases without any cross-database machinery: a page assembled from a
+    /// room and a shared chunk store fences each read at the commit it wrote
+    /// there, because each demand is about one history.
+    pub async fn get_after<D: Derive>(
+        &self,
+        spec: &BranchSpec,
+        derivation: D,
+        after: &CommitId,
+    ) -> anyhow::Result<D::Output> {
+        self.get_reported_after(spec, derivation, Some(after))
+            .await
+            .map(|(v, _)| v)
+    }
+
+    /// [`Cache::get_after`], reporting what happened. `None` is [`Cache::get`].
+    pub async fn get_reported_after<D: Derive>(
+        &self,
+        spec: &BranchSpec,
+        derivation: D,
+        after: Option<&CommitId>,
+    ) -> anyhow::Result<(D::Output, Outcome)> {
         let ns = self.namespace(spec);
         let key = self.key_of(&derivation)?;
-        let at = self.inner.head(&ns).await?;
+        let at = self.inner.head(&ns, after).await?;
         self.resolve(ns, key, at, derivation, None).await
     }
 
@@ -413,6 +450,7 @@ impl Cache {
             },
             cache: self.clone(),
             ns: ns.clone(),
+            foreign: std::sync::Mutex::new(BTreeMap::new()),
         };
         let value = derivation.compute(&scope).await?;
         let body = serde_json::to_vec(&value)?;
@@ -432,6 +470,7 @@ impl Cache {
                     Dependencies::Independent => http::DepSource::Independent,
                 },
                 into,
+                &scope.foreign_pins(),
             )
             .await?;
         if let Outcome::NotStored(why) = &outcome {
@@ -454,6 +493,40 @@ pub struct Scope {
     client: TerminusDBHttpClient,
     cache: Cache,
     ns: http::Ns,
+    /// Other databases this computation has read, each latched at its own
+    /// commit the first time it was asked for.
+    ///
+    /// A `Mutex` because `compute` takes `&Scope`: the pins have to outlive the
+    /// call that creates them so the store can report them, and a computation
+    /// that reads the same shared database twice must get the same snapshot
+    /// both times.
+    foreign: std::sync::Mutex<BTreeMap<http::Ns, ForeignScope>>,
+}
+
+/// Another database, as one computation sees it.
+#[derive(Clone)]
+pub struct ForeignScope {
+    commit: CommitId,
+    spec: BranchSpec,
+    client: TerminusDBHttpClient,
+}
+
+impl ForeignScope {
+    /// The client to read that database through. Pinned and recorded, exactly
+    /// like [`Scope::client`].
+    pub fn client(&self) -> &TerminusDBHttpClient {
+        &self.client
+    }
+
+    /// The spec to read with: that branch, pinned at [`ForeignScope::commit`].
+    pub fn spec(&self) -> &BranchSpec {
+        &self.spec
+    }
+
+    /// The commit this computation sees that database at.
+    pub fn commit(&self) -> &CommitId {
+        &self.commit
+    }
 }
 
 impl Scope {
@@ -476,6 +549,84 @@ impl Scope {
     /// This scope's id, as `GET /_reactor/scope/{id}` wants it.
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// Read **another database** inside this computation.
+    ///
+    /// The composition case: a page assembled from this room plus a shared
+    /// chunk store. Each database is latched at its own commit — there is no
+    /// single snapshot across databases that commit independently, so the value
+    /// is not "true at commit C" but "composed of exactly these revisions", and
+    /// that is what Reactor records.
+    ///
+    /// Invalidation reaches across: a commit to the other database that touches
+    /// something this computation read **evicts** the stored value, and the next
+    /// reader recomputes. The reads are recorded, so the dependency set is
+    /// observed here too — you are not declaring anything.
+    ///
+    /// Two things to know. The value is stored in *this* scope's database, so
+    /// that is where it is looked up and who may read it. And the pin is taken
+    /// once per database per computation: ask twice and you get the same
+    /// snapshot, which is what makes the result coherent.
+    pub async fn foreign(&self, db: &str) -> anyhow::Result<ForeignScope> {
+        self.foreign_in(db, None).await
+    }
+
+    /// [`Scope::foreign`] on a named branch rather than `main`.
+    pub async fn foreign_branch(&self, db: &str, branch: &str) -> anyhow::Result<ForeignScope> {
+        self.foreign_in(db, Some(branch)).await
+    }
+
+    async fn foreign_in(&self, db: &str, branch: Option<&str>) -> anyhow::Result<ForeignScope> {
+        let ns = http::Ns {
+            org: self.ns.org.clone(),
+            db: db.to_owned(),
+            branch: branch.unwrap_or("main").to_owned(),
+        };
+        if ns == self.ns {
+            anyhow::bail!(
+                "{db} is this scope's own database: read it with Scope::client, which is \
+                 already pinned at {}",
+                self.commit
+            );
+        }
+        if let Some(found) = self
+            .foreign
+            .lock()
+            .expect("a poisoned scope lock means a panic inside a computation")
+            .get(&ns)
+        {
+            return Ok(found.clone());
+        }
+        let commit = self.cache.inner.head(&ns, None).await?;
+        let entry = ForeignScope {
+            spec: BranchSpec {
+                db: ns.db.clone(),
+                branch: Some(ns.branch.clone()),
+                ref_commit: Some(commit.clone()),
+            },
+            // The same recording client: Reactor files each read under the
+            // namespace it was addressed to, so one label covers both.
+            client: self.client.clone(),
+            commit,
+        };
+        let mut pinned = self
+            .foreign
+            .lock()
+            .expect("a poisoned scope lock means a panic inside a computation");
+        // Another task may have latched it first; keep that one, so one
+        // computation never sees two snapshots of one database.
+        Ok(pinned.entry(ns).or_insert(entry).clone())
+    }
+
+    /// The commit each other database was latched at, for the store.
+    fn foreign_pins(&self) -> BTreeMap<http::Ns, CommitId> {
+        self.foreign
+            .lock()
+            .expect("a poisoned scope lock means a panic inside a computation")
+            .iter()
+            .map(|(ns, entry)| (ns.clone(), entry.commit.clone()))
+            .collect()
     }
 
     /// A nested derivation, at this scope's commit.

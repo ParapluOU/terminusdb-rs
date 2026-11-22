@@ -81,7 +81,7 @@ use tokio::sync::mpsc;
 
 use crate::change::{fire, ChangeSet};
 use crate::engine::predicates::{fire_predicates, PredicateRegistry};
-use crate::ids::{ContentHash, Position, Watermark};
+use crate::ids::{ContentHash, Namespace, Position, Watermark};
 use crate::metrics::Metrics;
 use crate::schema_index::SchemaIndex;
 use crate::store::FragmentStore;
@@ -91,7 +91,7 @@ use terminusdb_client::CommitId;
 use super::fragment::{BodyRef, FragmentKey, FragmentVersion, ResponseMeta};
 use super::index::TermIndex;
 use super::log::FiredLog;
-use super::{EngineConfig, FillResult, NsState, WriterMsg};
+use super::{EngineConfig, FillResult, ForeignRegistration, ForeignVerdict, NsState, WriterMsg};
 
 /// Owns all mutable state for one namespace.
 ///
@@ -109,6 +109,23 @@ pub struct NamespaceWriter {
     /// can keep a plain `Arc` and publish to the shared slot on change.
     schema: Arc<SchemaIndex>,
     index: TermIndex,
+    /// Entries in **other** namespaces that depend on terms in this one.
+    ///
+    /// The pivot table for cross-database composition, and it lives here rather
+    /// than in a shared structure for the same reason `index` does: it is read
+    /// and written only while applying a commit or a registration, both of
+    /// which are messages to this single writer. A commit therefore cannot
+    /// interleave with a registration, which is what closes the cross-namespace
+    /// fill/commit race (see [`super::ForeignRegistration`]).
+    ///
+    /// Entries here are **evicted**, never closed: the position in an
+    /// `IndexEntry` belongs to the other namespace's axis and is carried only so
+    /// the eviction can name the right version.
+    foreign: TermIndex,
+    /// Every namespace's mailbox, so an eviction can reach the writer that owns
+    /// the entry. Shared with the engine; a namespace absent from it has no
+    /// state and therefore nothing to evict.
+    peers: Arc<dashmap::DashMap<Namespace, Arc<NsState>>>,
     /// Live filter predicates, reference counted by the registered fragment
     /// versions that depend on them. Updated in lockstep with `index`: a
     /// predicate this registry has forgotten while a fragment still depends on
@@ -128,6 +145,7 @@ impl NamespaceWriter {
         cfg: Arc<EngineConfig>,
         store: Arc<dyn FragmentStore>,
         metrics: Arc<Metrics>,
+        peers: Arc<dashmap::DashMap<Namespace, Arc<NsState>>>,
     ) -> Self {
         let log = FiredLog::with_capacity(cfg.fired_log_capacity);
         let schema = state.schema.load_full();
@@ -139,6 +157,8 @@ impl NamespaceWriter {
             metrics,
             schema,
             index: TermIndex::new(),
+            foreign: TermIndex::new(),
+            peers,
             predicates: PredicateRegistry::new(),
             log,
             head: Position::ZERO,
@@ -224,6 +244,8 @@ impl NamespaceWriter {
             WriterMsg::Insert(fill) => self.on_insert(*fill),
             WriterMsg::Schema(schema) => self.on_schema(schema),
             WriterMsg::Purge { forget_watermark } => self.on_purge(forget_watermark),
+            WriterMsg::Evict(key) => self.on_evict(&key),
+            WriterMsg::ForeignRegister(reg) => self.on_foreign_register(*reg),
         }
     }
 
@@ -364,7 +386,100 @@ impl NamespaceWriter {
     }
 
     /// Close every registered version the fired set dirties, and unregister it.
+    /// Drop a key because something in another namespace moved under it.
+    ///
+    /// Unconditional: every version goes, not just the one open at some
+    /// position. There is no position in *this* namespace at which the foreign
+    /// change happened, so there is no honest interval to close — and a missing
+    /// entry is safe at every position, while a wrongly-open one is not.
+    fn on_evict(&mut self, key: &crate::engine::FragmentKey) {
+        if self.state.slots.remove(key).is_some() {
+            self.metrics.foreign_evictions.inc();
+            tracing::debug!(ns = %self.state.ns, key = ?key, "evicted by a foreign commit");
+        }
+        if let Some(entry) = self.index.unregister_key(key) {
+            self.predicates.release(&entry.deps);
+        }
+        self.metrics.tracked_keys.set(self.state.slots.len() as u64);
+        self.metrics
+            .live_predicates
+            .set(self.predicates.len() as u64);
+    }
+
+    /// Check-and-register, atomically with respect to this namespace's commits.
+    fn on_foreign_register(&mut self, reg: ForeignRegistration) {
+        let ForeignRegistration {
+            key,
+            from,
+            deps,
+            since,
+            reply,
+        } = reg;
+        // Older than the fired log can speak for: we cannot prove nothing
+        // relevant happened, so we must not claim it did not.
+        let verdict = if since < self.log.oldest_retained() {
+            ForeignVerdict::Fired
+        } else {
+            match self
+                .log
+                .first_invalidating_after(since, &deps, &self.schema)
+            {
+                Some(_) => ForeignVerdict::Fired,
+                None => {
+                    self.foreign.register(key.clone(), from, deps);
+                    self.metrics
+                        .foreign_registrations
+                        .set(self.foreign.len() as u64);
+                    ForeignVerdict::Clean
+                }
+            }
+        };
+        // The receiver is gone if the storing request was abandoned; the
+        // registration is still correct and the entry will be evicted as
+        // normal, so there is nothing to undo.
+        let _ = reply.send(verdict);
+    }
+
+    /// Tell every namespace holding a value composed from `fired` to drop it.
+    fn evict_foreign(&mut self, fired: &TermSet) {
+        let dirty = self.foreign.dirtied(fired, &self.schema);
+        for (id, key, _) in dirty {
+            self.foreign.unregister(id);
+            self.notify_peer(&key.ns.clone(), WriterMsg::Evict(key));
+        }
+        self.metrics
+            .foreign_registrations
+            .set(self.foreign.len() as u64);
+    }
+
+    /// Drop every foreign registration, evicting each entry.
+    ///
+    /// For a rewrite we could not diff: we no longer know what changed, so
+    /// everything composed from this namespace has to go.
+    fn evict_all_foreign(&mut self) {
+        let keys: Vec<_> = self.foreign.iter().map(|entry| entry.key.clone()).collect();
+        self.foreign.clear();
+        for key in keys {
+            self.notify_peer(&key.ns.clone(), WriterMsg::Evict(key));
+        }
+        self.metrics.foreign_registrations.set(0);
+    }
+
+    /// Post a message to another namespace's writer.
+    ///
+    /// A namespace with no state has nothing cached and therefore nothing to
+    /// evict, so an absent mailbox is not an error. Deliberately does *not*
+    /// create one: that would grow an unbounded queue nobody drains.
+    fn notify_peer(&self, ns: &Namespace, msg: WriterMsg) {
+        if let Some(state) = self.peers.get(ns) {
+            if state.tx.send(msg).is_err() {
+                tracing::warn!(%ns, "a peer writer is gone; its entry may outlive its inputs");
+            }
+        }
+    }
+
     fn invalidate(&mut self, fired: &TermSet, pos: Position) {
+        self.evict_foreign(fired);
         let dirty = self.index.dirtied(fired, &self.schema);
         let horizon = self.gc_horizon(pos);
         for (id, key, from) in dirty {
@@ -392,6 +507,7 @@ impl NamespaceWriter {
     }
 
     fn purge_state(&mut self, floor: Position) {
+        self.evict_all_foreign();
         self.state.slots.clear();
         self.index.clear();
         // The fragments that referred to these predicates are gone in the same

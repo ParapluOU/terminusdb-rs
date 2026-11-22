@@ -41,13 +41,13 @@
 //!   — see `nothing` in [`super::value`]) or, far more likely, a client whose
 //!   reads did not carry the label.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 
 use crate::ids::Namespace;
-use crate::term::Term;
+use crate::term::{Dep, Term};
 use terminusdb_client::CommitId;
 
 /// The request header that labels a read as belonging to a scope.
@@ -60,17 +60,28 @@ pub const SCOPE_HEADER: &str = "x-reactor-record";
 /// behind, and nothing else would ever clean it up.
 const SCOPE_TTL: Duration = Duration::from_secs(300);
 
-/// What one scope has observed.
-#[derive(Clone, Debug)]
-pub struct ScopeRecord {
-    /// The namespace the reads were against. A value may only be stored in the
-    /// namespace its inputs came from.
-    pub ns: Option<Namespace>,
+/// What one scope observed in one namespace.
+#[derive(Clone, Debug, Default)]
+pub struct NsReads {
     /// The union of the read sets, ordered precise → coarse by `Term`'s `Ord`.
     pub terms: BTreeSet<Term>,
-    /// The commits the recorded reads were pinned at. More than one means the
-    /// computation saw more than one snapshot.
+    /// The commits the reads against this namespace were pinned at. More than
+    /// one means the computation saw more than one snapshot *of this database*,
+    /// which is incoherent however many databases it read.
     pub commits: BTreeSet<String>,
+}
+
+/// What one scope has observed.
+///
+/// Reads are kept **per namespace**. A computation that reads two databases is
+/// not an error — a page assembled from a room and a shared chunk store is the
+/// ordinary case — but the two histories move independently, so each one's
+/// terms and each one's pin have to stay apart: the pins cannot be compared,
+/// and the terms have to reach different writers.
+#[derive(Clone, Debug)]
+pub struct ScopeRecord {
+    /// What was read, by namespace.
+    pub by_ns: BTreeMap<Namespace, NsReads>,
     /// Set when a read could not be attributed: see the module docs.
     pub poisoned: Option<&'static str>,
     /// How many reads were recorded, for the diagnostic endpoint.
@@ -81,20 +92,48 @@ pub struct ScopeRecord {
 impl ScopeRecord {
     fn new() -> Self {
         Self {
-            ns: None,
-            terms: BTreeSet::new(),
-            commits: BTreeSet::new(),
+            by_ns: BTreeMap::new(),
             poisoned: None,
             reads: 0,
             created: Instant::now(),
         }
     }
 
+    /// Every namespace this scope read, home first if it read one.
+    pub fn namespaces(&self) -> impl Iterator<Item = &Namespace> {
+        self.by_ns.keys()
+    }
+
+    /// The single commit this scope's reads of `ns` were pinned at, if there
+    /// is exactly one.
+    pub fn commit_for(&self, ns: &Namespace) -> Option<&str> {
+        let reads = self.by_ns.get(ns)?;
+        match reads.commits.len() {
+            1 => reads.commits.iter().next().map(String::as_str),
+            _ => None,
+        }
+    }
+
+    /// The dependency set, as namespace-qualified [`Dep`]s against `home`.
+    pub fn deps(&self, home: &Namespace) -> Vec<Dep> {
+        let mut out = Vec::new();
+        for (ns, reads) in &self.by_ns {
+            for term in &reads.terms {
+                out.push(if ns == home {
+                    Dep::home(term.clone())
+                } else {
+                    Dep::foreign(ns.clone(), term.clone())
+                });
+            }
+        }
+        out
+    }
+
     /// The reason this scope cannot back a stored value, if there is one.
     ///
     /// Stated as a sentence because it is handed to an application developer in
     /// an HTTP response, and "409" on its own has never helped anybody.
-    pub fn refusal(&self, at: &CommitId) -> Option<String> {
+    pub fn refusal(&self, home: &Namespace, at: &CommitId) -> Option<String> {
         if let Some(reason) = self.poisoned {
             return Some(format!(
                 "a read in this computation was not tracked ({reason}), so a value derived from \
@@ -109,13 +148,27 @@ impl ScopeRecord {
                     .to_owned(),
             );
         }
-        if !self.commits.contains(at.as_str()) || self.commits.len() > 1 {
-            let seen: Vec<&str> = self.commits.iter().map(String::as_str).collect();
-            return Some(format!(
-                "the reads were pinned at {:?} but the value claims to be at {at}: a value \
-                 computed across several snapshots is true at none of them",
-                seen
-            ));
+        // Each database separately: two commits of one history are two
+        // snapshots of it, and a value is true at neither. Two commits of two
+        // histories are just a composition, which is allowed — what it is
+        // composed *of* is then recorded revision by revision.
+        for (ns, reads) in &self.by_ns {
+            if reads.commits.len() > 1 {
+                let seen: Vec<&str> = reads.commits.iter().map(String::as_str).collect();
+                return Some(format!(
+                    "the reads of {ns} were pinned at {seen:?}: a value computed across several \
+                     snapshots of one database is true at none of them"
+                ));
+            }
+        }
+        if let Some(reads) = self.by_ns.get(home) {
+            if !reads.commits.contains(at.as_str()) {
+                let seen: Vec<&str> = reads.commits.iter().map(String::as_str).collect();
+                return Some(format!(
+                    "the reads of {home} were pinned at {seen:?} but the value claims to be at \
+                     {at}"
+                ));
+            }
         }
         None
     }
@@ -157,24 +210,21 @@ impl Recorder {
             return;
         };
         record.reads += 1;
-        match &record.ns {
-            None => record.ns = Some(ns.clone()),
-            Some(seen) if seen != ns => {
-                record.poisoned = Some("it read a different namespace");
-            }
-            Some(_) => {}
-        }
-        match pinned {
-            Some(commit) => {
-                record.commits.insert(commit.as_str().to_owned());
-            }
-            None => record.poisoned = Some("it was not pinned at a commit"),
+        let unpinned = pinned.is_none();
+        let mut barrier = false;
+        let reads = record.by_ns.entry(ns.clone()).or_default();
+        if let Some(commit) = pinned {
+            reads.commits.insert(commit.as_str().to_owned());
         }
         for term in terms {
-            if matches!(term, Term::Everything) {
-                record.poisoned = Some("its dependencies could not be narrowed");
-            }
-            record.terms.insert(term.clone());
+            barrier |= matches!(term, Term::Everything);
+            reads.terms.insert(term.clone());
+        }
+        if unpinned {
+            record.poisoned = Some("it was not pinned at a commit");
+        }
+        if barrier {
+            record.poisoned = Some("its dependencies could not be narrowed");
         }
     }
 
@@ -245,6 +295,7 @@ impl Recorder {
 mod tests {
     use super::*;
     use crate::ids::{ClassName, DocId};
+    use crate::term::Dep;
 
     fn ns() -> Namespace {
         Namespace::new("admin", "people", "main")
@@ -274,8 +325,12 @@ mod tests {
         );
         let record = recorder.peek("s1").expect("the scope exists");
         assert_eq!(record.reads, 2);
-        assert_eq!(record.terms.len(), 2, "the duplicate is one term, not two");
-        assert_eq!(record.refusal(&commit("c1")), None);
+        assert_eq!(
+            record.deps(&ns()).len(),
+            2,
+            "the duplicate is one term, not two"
+        );
+        assert_eq!(record.refusal(&ns(), &commit("c1")), None);
     }
 
     #[test]
@@ -297,7 +352,7 @@ mod tests {
         let refusal = recorder
             .peek("s1")
             .unwrap()
-            .refusal(&commit("c1"))
+            .refusal(&ns(), &commit("c1"))
             .expect("poisoned");
         assert!(refusal.contains("not tracked"), "{refusal}");
         assert!(refusal.contains("bypassed"), "{refusal}");
@@ -310,7 +365,7 @@ mod tests {
         assert!(recorder
             .peek("s1")
             .unwrap()
-            .refusal(&commit("c1"))
+            .refusal(&ns(), &commit("c1"))
             .is_some());
     }
 
@@ -326,7 +381,7 @@ mod tests {
         let refusal = recorder
             .peek("s1")
             .unwrap()
-            .refusal(&commit("c1"))
+            .refusal(&ns(), &commit("c1"))
             .expect("unpinned");
         assert!(refusal.contains("not pinned"), "{refusal}");
     }
@@ -349,7 +404,7 @@ mod tests {
         let refusal = recorder
             .peek("s1")
             .unwrap()
-            .refusal(&commit("c1"))
+            .refusal(&ns(), &commit("c1"))
             .expect("two commits");
         assert!(refusal.contains("several snapshots"), "{refusal}");
     }
@@ -366,12 +421,13 @@ mod tests {
         assert!(recorder
             .peek("s1")
             .unwrap()
-            .refusal(&commit("c9"))
+            .refusal(&ns(), &commit("c9"))
             .is_some());
     }
 
     #[test]
-    fn reading_a_second_namespace_poisons_it() {
+    fn reading_a_second_namespace_is_a_composition_not_a_refusal() {
+        let other = Namespace::new("admin", "shared", "main");
         let recorder = Recorder::default();
         recorder.record(
             "s1",
@@ -381,16 +437,63 @@ mod tests {
         );
         recorder.record(
             "s1",
-            &Namespace::new("admin", "other", "main"),
+            &other,
+            Some(&commit("s7")),
+            &[Term::Doc(DocId::parse("Chunk/intro"))],
+        );
+        let record = recorder.peek("s1").unwrap();
+
+        // Two histories, two pins, and neither is a reason to refuse.
+        assert_eq!(record.refusal(&ns(), &commit("c1")), None);
+        assert_eq!(record.commit_for(&ns()), Some("c1"));
+        assert_eq!(record.commit_for(&other), Some("s7"));
+
+        // The foreign read is qualified, the home one is not.
+        let deps = record.deps(&ns());
+        assert!(deps.contains(&Dep::home(Term::Members(ClassName::new("Person")))));
+        assert!(deps.contains(&Dep::foreign(
+            other.clone(),
+            Term::Doc(DocId::parse("Chunk/intro"))
+        )));
+
+        // And which namespace is home decides which way round that goes.
+        let flipped = record.deps(&other);
+        assert!(flipped.contains(&Dep::home(Term::Doc(DocId::parse("Chunk/intro")))));
+        assert!(flipped.contains(&Dep::foreign(ns(), Term::Members(ClassName::new("Person")))));
+    }
+
+    #[test]
+    fn two_snapshots_of_one_contributing_database_are_still_one_too_many() {
+        let other = Namespace::new("admin", "shared", "main");
+        let recorder = Recorder::default();
+        recorder.record(
+            "s1",
+            &ns(),
             Some(&commit("c1")),
             &[Term::Members(ClassName::new("Person"))],
+        );
+        recorder.record(
+            "s1",
+            &other,
+            Some(&commit("s7")),
+            &[Term::Doc(DocId::parse("Chunk/intro"))],
+        );
+        recorder.record(
+            "s1",
+            &other,
+            Some(&commit("s8")),
+            &[Term::Doc(DocId::parse("Chunk/outro"))],
         );
         let refusal = recorder
             .peek("s1")
             .unwrap()
-            .refusal(&commit("c1"))
-            .expect("two namespaces");
-        assert!(refusal.contains("different namespace"), "{refusal}");
+            .refusal(&ns(), &commit("c1"))
+            .expect("two commits of one history");
+        assert!(refusal.contains("several snapshots"), "{refusal}");
+        assert!(
+            refusal.contains("shared"),
+            "and it must say which: {refusal}"
+        );
     }
 
     #[test]
@@ -399,11 +502,18 @@ mod tests {
         recorder.record("s1", &ns(), Some(&commit("c1")), &[]);
         // A read with no terms at all: it happened, so the scope is not empty,
         // but it contributes nothing.
-        assert_eq!(recorder.peek("s1").unwrap().refusal(&commit("c1")), None);
+        assert_eq!(
+            recorder.peek("s1").unwrap().refusal(&ns(), &commit("c1")),
+            None
+        );
 
         let empty = Recorder::default();
         empty.poison("s2", "nothing was recorded");
-        assert!(empty.peek("s2").unwrap().refusal(&commit("c1")).is_some());
+        assert!(empty
+            .peek("s2")
+            .unwrap()
+            .refusal(&ns(), &commit("c1"))
+            .is_some());
         assert!(
             empty.peek("s3").is_none(),
             "an unknown scope is not a scope"

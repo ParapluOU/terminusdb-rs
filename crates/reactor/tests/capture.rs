@@ -331,6 +331,72 @@ async fn a_reset_is_handled_as_a_non_fast_forward() -> Result<()> {
         .await
 }
 
+/// `/_reactor/head?namespace=…` reports one namespace, and `min_version`
+/// fences the answer.
+///
+/// Both halves exist for the same caller: a client latching a commit before a
+/// computation. With a database per room the unfiltered list is large and
+/// almost entirely irrelevant to it, and a read fence comes too late to help —
+/// by the time a read is issued the stale snapshot has already been pinned.
+#[tokio::test]
+async fn the_head_endpoint_answers_for_one_namespace_and_fences() -> Result<()> {
+    let server = common::upstream().await?;
+    let up = &server;
+    server
+        .with_schema::<(Person,), _, _, _>("rx_capture_head_one", |direct, spec| async move {
+            let args = DocumentInsertArgs::from(spec.clone());
+            direct
+                .insert_instance(&person("alice", "Ann", 30)?, args)
+                .await?;
+
+            let reactor = Reactor::start(up, &spec.db).await?;
+            let path = format!("admin/{}/local/branch/main", spec.db);
+            let head = reactor.head().expect("a watermark");
+
+            let one = reactor
+                .get(&format!("/_reactor/head?namespace={path}"))
+                .await?;
+            assert_eq!(one.status, 200, "body: {}", one.text());
+            let report = one.json()?;
+            assert_eq!(report.as_array().map(Vec::len), Some(1), "{}", one.text());
+            assert_eq!(report[0]["namespace"], serde_json::json!(path));
+
+            // A commit we have reached is satisfied immediately.
+            let reached = reactor
+                .get(&format!(
+                    "/_reactor/head?namespace={path}&min_version={head}"
+                ))
+                .await?;
+            assert_eq!(reached.status, 200, "body: {}", reached.text());
+
+            // One we will never reach is refused rather than answered stale.
+            let never = reactor
+                .get(&format!(
+                    "/_reactor/head?namespace={path}&min_version=nosuchcommitatall"
+                ))
+                .await?;
+            assert_eq!(
+                never.status,
+                412,
+                "an unreachable demand must fail the latch, not silently hand back an older \
+                 pin: {}",
+                never.text()
+            );
+
+            // An untracked namespace is a 404 that says what to do about it.
+            let absent = reactor
+                .get("/_reactor/head?namespace=admin/no-such-db/local/branch/main")
+                .await?;
+            assert_eq!(absent.status, 404, "body: {}", absent.text());
+
+            // And a malformed one is a 400, not an empty list.
+            let bogus = reactor.get("/_reactor/head?namespace=admin/mydb").await?;
+            assert_eq!(bogus.status, 400, "body: {}", bogus.text());
+            Ok(())
+        })
+        .await
+}
+
 /// `/_reactor/head` reports the namespace's real position, which is how an
 /// operator or load balancer judges replication state.
 #[tokio::test]

@@ -53,6 +53,23 @@ impl Namespace {
         format!("{}/{}/local/branch/{}", self.org, self.db, self.branch)
     }
 
+    /// The inverse of [`Namespace::path`].
+    ///
+    /// `None` for anything that is not exactly `org/db/local/branch/<branch>`,
+    /// including the `local/commit/<id>` form: a commit names a point in a
+    /// namespace's history, not a namespace.
+    pub fn from_path(path: &str) -> Option<Namespace> {
+        let parts: Vec<&str> = path.split('/').collect();
+        match parts.as_slice() {
+            [org, db, "local", "branch", branch]
+                if !org.is_empty() && !db.is_empty() && !branch.is_empty() =>
+            {
+                Some(Namespace::new(*org, *db, *branch))
+            }
+            _ => None,
+        }
+    }
+
     /// `admin/mydb/local/commit/<id>` — the *pinned* upstream path segment.
     ///
     /// Invariant 2 of the spec: every fill is issued against this form, never
@@ -465,6 +482,20 @@ mod tests {
             "admin/mydb/local/commit/abc123"
         );
         assert_eq!(ns.to_string(), "admin/mydb/local/branch/main");
+        assert_eq!(Namespace::from_path(&ns.path()), Some(ns));
+    }
+
+    #[test]
+    fn only_the_branch_form_parses_back_to_a_namespace() {
+        assert_eq!(
+            Namespace::from_path("admin/mydb/local/branch/feature"),
+            Some(Namespace::new("admin", "mydb", "feature"))
+        );
+        // A commit names a point in a history, not a namespace.
+        assert_eq!(Namespace::from_path("admin/mydb/local/commit/abc123"), None);
+        assert_eq!(Namespace::from_path("admin/mydb"), None);
+        assert_eq!(Namespace::from_path("admin//local/branch/main"), None);
+        assert_eq!(Namespace::from_path("a/b/local/branch/main/extra"), None);
     }
 
     #[test]

@@ -795,6 +795,21 @@ pub fn with_branches<'a>(branches: &'a [&'a str]) -> impl FnOnce(&mut Config) + 
     }
 }
 
+/// Track a second database as well, configured from the start.
+///
+/// Distinct from registering one at run time (`tests/namespaces.rs`): the
+/// database must already exist, and capture bootstraps it at startup like any
+/// other configured namespace.
+pub fn with_database<'a>(db: &'a str) -> impl FnOnce(&mut Config) + 'a {
+    move |config: &mut Config| {
+        let template = config.namespaces[0].clone();
+        config.namespaces.push(NamespaceConfig {
+            db: db.to_owned(),
+            ..template
+        });
+    }
+}
+
 /// A driver override, for the per-driver capture tests.
 pub fn with_driver(driver: Driver) -> impl FnOnce(&mut Config) {
     move |config: &mut Config| {

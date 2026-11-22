@@ -8,6 +8,7 @@
 use bytes::Bytes;
 use reqwest::StatusCode;
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use terminusdb_client::{CommitId, TerminusDBHttpClient};
@@ -23,8 +24,11 @@ const DEPS_HEADER: &str = "x-reactor-deps";
 /// Union this value's dependencies into a second scope as well.
 const INTO_HEADER: &str = "x-reactor-into";
 
+/// The commit each *other* database's reads were pinned at.
+const FOREIGN_AT_HEADER: &str = "x-reactor-foreign-at";
+
 /// Namespace coordinates.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Ns {
     pub org: String,
     pub db: String,
@@ -33,7 +37,7 @@ pub(crate) struct Ns {
 
 impl Ns {
     /// `org/db/local/branch/branch`, as `/_reactor/head` reports it.
-    fn path(&self) -> String {
+    pub(crate) fn path(&self) -> String {
         format!("{}/{}/local/branch/{}", self.org, self.db, self.branch)
     }
 }
@@ -77,17 +81,30 @@ impl Inner {
     /// Latched once per computation: everything the computation reads is pinned
     /// at it, and the stored value is placed at it. A node that is not tracking
     /// the namespace reports no commit, and there is nothing to cache against.
-    pub(crate) async fn head(&self, ns: &Ns) -> anyhow::Result<CommitId> {
-        let url = self.reactor.join("/_reactor/head")?;
-        let reports: Vec<HeadReport> = self
+    /// `after` demands that the latched commit not be older than one the caller
+    /// has already seen — read-your-writes across a composition. Reactor waits
+    /// for its watermark to reach it and answers `412` if it cannot, which is
+    /// surfaced here as an error rather than a quietly stale pin.
+    pub(crate) async fn head(&self, ns: &Ns, after: Option<&CommitId>) -> anyhow::Result<CommitId> {
+        let wanted = ns.path();
+        let mut url = self.reactor.join("/_reactor/head")?;
+        url.query_pairs_mut().append_pair("namespace", &wanted);
+        if let Some(after) = after {
+            url.query_pairs_mut()
+                .append_pair("min_version", after.as_str());
+        }
+        let response = self
             .http
             .get(url)
             .basic_auth(&self.user, Some(&self.pass))
             .send()
-            .await?
-            .json()
             .await?;
-        let wanted = ns.path();
+        if !response.status().is_success() {
+            let status = response.status();
+            let detail = response.text().await.unwrap_or_default();
+            anyhow::bail!("Reactor would not latch a commit for {wanted} ({status}): {detail}");
+        }
+        let reports: Vec<HeadReport> = response.json().await?;
         reports
             .into_iter()
             .find(|report| report.namespace == wanted)
@@ -95,9 +112,9 @@ impl Inner {
             .map(CommitId::new)
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "Reactor is not tracking {wanted} (or has no watermark for it yet), so \
-                     nothing derived from it can be cached. Add it to [[namespace]] in the \
-                     Reactor configuration."
+                    "Reactor has no watermark for {wanted} yet, so nothing derived from it can \
+                     be cached. The first read after a namespace is registered is always a \
+                     miss: there is no position to pin a fill at until the watermark lands."
                 )
             })
     }
@@ -132,6 +149,7 @@ impl Inner {
     }
 
     /// Hand a value over.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn store(
         &self,
         ns: &Ns,
@@ -140,6 +158,7 @@ impl Inner {
         body: Bytes,
         deps: DepSource<'_>,
         into: Option<&str>,
+        foreign: &BTreeMap<Ns, CommitId>,
     ) -> anyhow::Result<Outcome> {
         let mut request = self
             .http
@@ -158,6 +177,17 @@ impl Inner {
         }
         if let Some(outer) = into {
             request = request.header(INTO_HEADER, outer);
+        }
+        if !foreign.is_empty() {
+            // Which revision of each *other* database this value was composed
+            // from. Reactor checks each against that namespace's own fired log
+            // before it will let the value stand.
+            let pins = foreign
+                .iter()
+                .map(|(ns, at)| format!("{}={}", ns.path(), at.as_str()))
+                .collect::<Vec<_>>()
+                .join(",");
+            request = request.header(FOREIGN_AT_HEADER, pins);
         }
 
         let response = request.body(body).send().await?;

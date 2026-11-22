@@ -35,6 +35,7 @@
 //! several users is not separated by it, which is why the key is the caller's:
 //! put the user in it.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -44,9 +45,11 @@ use axum::Json;
 use http::{HeaderMap, StatusCode};
 use serde::{Deserialize, Serialize};
 
-use crate::engine::{CommitLookup, FillResult, Lookup, ResponseMeta, WriterMsg};
+use crate::engine::{
+    CommitLookup, FillResult, ForeignRegistration, ForeignVerdict, Lookup, ResponseMeta, WriterMsg,
+};
 use crate::ids::{DerivedKey, Namespace};
-use crate::term::Term;
+use crate::term::{Dep, Term};
 use terminusdb_client::CommitId;
 
 use super::scope;
@@ -64,6 +67,17 @@ pub const AT_HEADER: &str = "x-reactor-at";
 /// reads Reactor cannot see; a recorded scope is the better path, because a
 /// declaration can be wrong.
 pub const DEPS_HEADER: &str = "x-reactor-deps";
+
+/// The commit each *other* namespace's reads were pinned at.
+///
+/// `org/db/local/branch/main=<commit>,…`. A value composed from several
+/// databases is not true at one commit — there is no such commit — so it
+/// records which revision of each contributing history it was built from, and
+/// Reactor checks each one against that namespace's own fired log. Set
+/// automatically when the dependency set comes from a recorded scope; required
+/// when foreign dependencies are *declared*, since a declaration carries no
+/// pin of its own.
+pub const FOREIGN_AT_HEADER: &str = "x-reactor-foreign-at";
 
 /// Union this value's dependencies into a second scope as well.
 ///
@@ -244,6 +258,17 @@ pub async fn put(
     // Where the dependency set comes from. A recorded scope is the sound path —
     // Reactor watched the reads — and a declared list is the fallback for a
     // computation whose reads it could not see.
+    let Some(mut foreign_at) = parse_foreign_at(&headers) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!(
+                "{FOREIGN_AT_HEADER} must be `org/db/local/branch/<branch>=<commit>` pairs, \
+                 comma separated\n"
+            ),
+        )
+            .into_response();
+    };
+
     let deps = match scope_label(&headers) {
         Some(id) => {
             // Taken, not copied: one scope backs one value, so a client cannot
@@ -263,24 +288,32 @@ pub async fn put(
                 )
                     .into_response();
             };
-            if let Some(why) = record.refusal(&commit) {
+            if let Some(why) = record.refusal(&ns, &commit) {
                 return (StatusCode::CONFLICT, format!("{why}\n")).into_response();
             }
-            if record.ns.as_ref() != Some(&ns) {
-                return (
-                    StatusCode::CONFLICT,
-                    format!(
-                        "the recorded reads were against {}, not {ns}\n",
-                        record
-                            .ns
-                            .as_ref()
-                            .map(|ns| ns.to_string())
-                            .unwrap_or_else(|| "nothing".to_owned())
-                    ),
-                )
-                    .into_response();
+            // A recorded scope knows every pin it read at, so the caller does
+            // not have to state them: the header is for the declared path.
+            for other in record.namespaces() {
+                if other == &ns {
+                    continue;
+                }
+                match record.commit_for(other) {
+                    Some(at) => {
+                        foreign_at.insert(other.clone(), CommitId::new(at));
+                    }
+                    // `refusal` has already rejected several commits for one
+                    // namespace, so this is the unpinned case, which it has
+                    // also rejected. Belt and braces.
+                    None => {
+                        return (
+                            StatusCode::CONFLICT,
+                            format!("the reads of {other} were not pinned at one commit\n"),
+                        )
+                            .into_response()
+                    }
+                }
             }
-            record.terms.into_iter().collect::<Vec<_>>()
+            record.deps(&ns)
         }
         None => match parse_deps(&headers) {
             Some(deps) => deps,
@@ -302,7 +335,7 @@ pub async fn put(
         },
     };
 
-    if deps.iter().any(|term| matches!(term, Term::Everything)) {
+    if deps.iter().any(|dep| matches!(dep.term, Term::Everything)) {
         return (
             StatusCode::BAD_REQUEST,
             format!(
@@ -312,6 +345,35 @@ pub async fn put(
             ),
         )
             .into_response();
+    }
+
+    let (deps, foreign) = partition(deps, &ns);
+
+    // Every contributing namespace must be tracked and must have told us where
+    // the value's reads of it sit in its history. Without that there is nothing
+    // to check the race against and nothing that could fire an eviction, so the
+    // value would be memoized against inputs nobody is watching.
+    for other in foreign.keys() {
+        if !state.registry.tracks(other) {
+            return (
+                StatusCode::CONFLICT,
+                format!(
+                    "this value depends on {other}, which is not tracked: nothing watches its \
+                     commits, so the value could never be invalidated\n"
+                ),
+            )
+                .into_response();
+        }
+        if !foreign_at.contains_key(other) {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "this value depends on {other} but {FOREIGN_AT_HEADER} does not say which \
+                     commit of it the value was computed from\n"
+                ),
+            )
+                .into_response();
+        }
     }
 
     let position = match state.engine.position_of(&ns, &commit) {
@@ -346,8 +408,9 @@ pub async fn put(
         .map(str::to_owned)
         .or_else(|| Some("application/json".to_owned()));
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    let fragment = crate::engine::FragmentKey::derived(ns.clone(), key);
     let fill = FillResult {
-        key: crate::engine::FragmentKey::derived(ns.clone(), key),
+        key: fragment.clone(),
         at: position,
         commit: commit.clone(),
         body,
@@ -381,7 +444,63 @@ pub async fn put(
             .into_response();
     };
     state.engine.metrics().derived_stores.inc();
-    if version.to.is_some() {
+
+    // Now the cross-namespace half of the insert protocol. The value is
+    // already in the graph, which is deliberate: each foreign writer checks its
+    // own fired log *and* registers the entry in one message, so a commit there
+    // is either before the check (reported here) or after the registration
+    // (and fires an eviction). Doing it the other way round — register, then
+    // insert — would let an eviction arrive for a key that does not exist yet
+    // and be lost.
+    let mut raced = version.to.is_some();
+    for (other, terms) in foreign {
+        let at = foreign_at
+            .get(&other)
+            .expect("checked above: every foreign namespace has a pin");
+        let since = match state.engine.position_of(&other, at) {
+            CommitLookup::Applied(position) => Some(position),
+            // We no longer remember where that commit sits in its history, so
+            // we cannot prove nothing relevant has happened since.
+            CommitLookup::Unknown => None,
+        };
+        let verdict = match since {
+            None => ForeignVerdict::Fired,
+            Some(since) => {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let registration = ForeignRegistration {
+                    key: fragment.clone(),
+                    from: version.from,
+                    deps: terms,
+                    since,
+                    reply: tx,
+                };
+                match state
+                    .engine
+                    .send(&other, WriterMsg::ForeignRegister(Box::new(registration)))
+                {
+                    Ok(()) => rx.await.unwrap_or(ForeignVerdict::Fired),
+                    // No writer there: nothing would ever evict this.
+                    Err(_) => ForeignVerdict::Fired,
+                }
+            }
+        };
+        if verdict == ForeignVerdict::Fired {
+            tracing::debug!(
+                %ns, %other,
+                "a commit in a contributing namespace landed between this value's reads and \
+                 its store; dropping it"
+            );
+            state.engine.metrics().foreign_registrations_refused.inc();
+            raced = true;
+        }
+    }
+    if raced && version.to.is_none() {
+        // Correct at the commit it was computed at, already superseded by a
+        // commit somewhere it read. Drop it rather than leave it open: there
+        // is no position in *this* namespace at which to close it.
+        let _ = state.engine.send(&ns, WriterMsg::Evict(fragment.clone()));
+    }
+    if raced {
         state.engine.metrics().derived_stores_raced.inc();
     }
     // A nested derivation: the outer computation depends on everything this
@@ -392,8 +511,8 @@ pub async fn put(
             .record(outer, &ns, Some(&commit), &version.deps);
     }
     Json(StoreReport {
-        current: version.is_open(),
-        raced: version.to.is_some(),
+        current: version.is_open() && !raced,
+        raced,
         etag: format!("\"{}\"", version.hash.to_hex()),
         from: version.from.to_string(),
         to: version.to.map(|to| to.to_string()),
@@ -459,12 +578,51 @@ fn header_text<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
 /// empty dependency set, which is an entry that never expires. All-or-nothing
 /// on the terms themselves, via [`Term::parse_list`] — a partially understood
 /// dependency set is not a smaller one, it is a wrong one.
-fn parse_deps(headers: &HeaderMap) -> Option<Vec<Term>> {
+fn parse_deps(headers: &HeaderMap) -> Option<Vec<Dep>> {
     let text = header_text(headers, DEPS_HEADER)?;
     if text.eq_ignore_ascii_case("nothing") {
         return Some(Vec::new());
     }
-    Term::parse_list(text)
+    Dep::parse_list(text)
+}
+
+/// Parse `X-Reactor-Foreign-At`.
+///
+/// `None` is "the header was malformed", which must refuse rather than quietly
+/// mean "no foreign pins" — the two differ by whether a composition gets
+/// checked for the race at all.
+fn parse_foreign_at(headers: &HeaderMap) -> Option<BTreeMap<Namespace, CommitId>> {
+    let Some(text) = header_text(headers, FOREIGN_AT_HEADER) else {
+        return Some(BTreeMap::new());
+    };
+    let mut out = BTreeMap::new();
+    for element in text.split(',') {
+        let element = element.trim();
+        if element.is_empty() {
+            continue;
+        }
+        let (path, commit) = element.split_once('=')?;
+        let ns = Namespace::from_path(path.trim())?;
+        let commit = commit.trim();
+        if commit.is_empty() {
+            return None;
+        }
+        out.insert(ns, CommitId::new(commit));
+    }
+    Some(out)
+}
+
+/// Split a dependency set into this namespace's terms and everyone else's.
+fn partition(deps: Vec<Dep>, home: &Namespace) -> (Vec<Term>, BTreeMap<Namespace, Vec<Term>>) {
+    let mut local = Vec::new();
+    let mut foreign: BTreeMap<Namespace, Vec<Term>> = BTreeMap::new();
+    for dep in deps {
+        match dep.ns {
+            Some(ns) if &ns != home => foreign.entry(ns).or_default().push(dep.term),
+            _ => local.push(dep.term),
+        }
+    }
+    (local, foreign)
 }
 
 #[cfg(test)]
@@ -515,8 +673,76 @@ mod tests {
             Term::Members(ClassName::new("Person")),
             Term::ClassField(ClassName::new("Person"), crate::ids::PropName::new("name")),
         ] {
-            assert!(deps.contains(&expected), "{expected} missing from {deps:?}");
+            assert!(
+                deps.contains(&Dep::home(expected.clone())),
+                "{expected} missing from {deps:?}"
+            );
         }
+    }
+
+    #[test]
+    fn a_dependency_may_name_another_namespace() {
+        let deps = parse_deps(&headers(&[(
+            DEPS_HEADER,
+            "doc:Person/alice, admin/shared/local/branch/main#doc:Chunk/intro",
+        )]))
+        .expect("both parse");
+        let home = Namespace::new("admin", "room-42", "main");
+        let (local, foreign) = partition(deps, &home);
+        assert_eq!(local, vec![Term::Doc(DocId::parse("Person/alice"))]);
+        assert_eq!(
+            foreign.get(&Namespace::new("admin", "shared", "main")),
+            Some(&vec![Term::Doc(DocId::parse("Chunk/intro"))])
+        );
+    }
+
+    #[test]
+    fn a_dependency_on_the_home_namespace_is_local_however_it_is_written() {
+        let home = Namespace::new("admin", "room-42", "main");
+        let deps = parse_deps(&headers(&[(
+            DEPS_HEADER,
+            "admin/room-42/local/branch/main#doc:Person/alice",
+        )]))
+        .expect("it parses");
+        let (local, foreign) = partition(deps, &home);
+        assert_eq!(local, vec![Term::Doc(DocId::parse("Person/alice"))]);
+        assert!(
+            foreign.is_empty(),
+            "naming your own namespace is not foreign"
+        );
+    }
+
+    #[test]
+    fn foreign_pins_parse_and_a_malformed_one_refuses() {
+        let pins = parse_foreign_at(&headers(&[(
+            FOREIGN_AT_HEADER,
+            "admin/shared/local/branch/main=abc123, admin/other/local/branch/main=def456",
+        )]))
+        .expect("both parse");
+        assert_eq!(
+            pins.get(&Namespace::new("admin", "shared", "main"))
+                .map(CommitId::as_str),
+            Some("abc123")
+        );
+        assert_eq!(pins.len(), 2);
+
+        // Absent is an empty map; malformed is a refusal. The difference
+        // decides whether a composition gets checked for the race at all.
+        assert_eq!(
+            parse_foreign_at(&HeaderMap::new()).map(|m| m.len()),
+            Some(0)
+        );
+        assert_eq!(
+            parse_foreign_at(&headers(&[(FOREIGN_AT_HEADER, "admin/shared=abc")])),
+            None
+        );
+        assert_eq!(
+            parse_foreign_at(&headers(&[(
+                FOREIGN_AT_HEADER,
+                "admin/shared/local/branch/main"
+            )])),
+            None
+        );
     }
 
     #[test]

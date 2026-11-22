@@ -235,6 +235,59 @@ pub enum WriterMsg {
         /// Also forget the published watermark. See above.
         forget_watermark: bool,
     },
+    /// Drop a key outright, because something *in another namespace* that it
+    /// was composed from has changed.
+    ///
+    /// Not a `close(to)`, which is what a local invalidation does: an interval
+    /// is expressed in this namespace's positions, and a commit in another
+    /// namespace did not happen at any of them. Deleting the versions needs no
+    /// shared clock — a reader latched anywhere gets a miss and refills, and a
+    /// miss is safe at every position — which is what makes cross-namespace
+    /// invalidation possible without turning every position into a vector.
+    Evict(FragmentKey),
+    /// A value in *another* namespace depends on terms in this one.
+    ///
+    /// Handled here rather than in a shared table because the check and the
+    /// registration have to be atomic with respect to this namespace's commits,
+    /// and the single writer is the only place where that is true for free. See
+    /// [`ForeignRegistration`].
+    ForeignRegister(Box<ForeignRegistration>),
+}
+
+/// A request to watch this namespace's terms on another namespace's behalf.
+///
+/// The reply closes the cross-namespace equivalent of the fill/commit race. The
+/// value was computed from reads pinned at `since`; between then and now this
+/// namespace may have committed something that already invalidates it. The
+/// writer answers that question from its own fired log *and* registers the
+/// entry in the same message, so there is no window between the two: a commit
+/// is either before the check (and reported) or after the registration (and
+/// fires an eviction). Nothing can land in between, because the writer is
+/// single-threaded.
+#[derive(Debug)]
+pub struct ForeignRegistration {
+    /// The key to evict, in its own namespace.
+    pub key: FragmentKey,
+    /// The version's `from` position **in its own namespace**, so the eviction
+    /// names the right version.
+    pub from: Position,
+    /// The terms in *this* namespace the value depends on.
+    pub deps: Vec<Term>,
+    /// The position in this namespace the value's reads were pinned at.
+    pub since: Position,
+    /// Where to send the verdict.
+    pub reply: oneshot::Sender<ForeignVerdict>,
+}
+
+/// What a [`ForeignRegistration`] found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForeignVerdict {
+    /// Nothing fired since `since`; the entry is registered and will be evicted
+    /// when something does.
+    Clean,
+    /// A commit between `since` and now already invalidates it. **Not**
+    /// registered: the caller must not keep the value.
+    Fired,
 }
 
 /// Per-namespace state shared between readers and the writer.
@@ -307,7 +360,7 @@ impl NsState {
 pub struct Engine {
     cfg: Arc<EngineConfig>,
     store: Arc<dyn FragmentStore>,
-    namespaces: DashMap<Namespace, Arc<NsState>>,
+    namespaces: Arc<DashMap<Namespace, Arc<NsState>>>,
     metrics: Arc<Metrics>,
 }
 
@@ -317,7 +370,7 @@ impl Engine {
         Self {
             cfg: Arc::new(cfg),
             store,
-            namespaces: DashMap::new(),
+            namespaces: Arc::new(DashMap::new()),
             metrics: Arc::new(Metrics::default()),
         }
     }
@@ -481,6 +534,7 @@ impl Engine {
             Arc::clone(&self.cfg),
             Arc::clone(&self.store),
             Arc::clone(&self.metrics),
+            Arc::clone(&self.namespaces),
         ))
     }
 

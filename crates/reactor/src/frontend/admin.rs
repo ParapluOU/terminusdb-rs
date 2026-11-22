@@ -9,8 +9,9 @@
 //! cache you cannot interrogate online is a cache nobody should trust.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use http::StatusCode;
@@ -20,6 +21,7 @@ use crate::analyze::{self, ReqView};
 use crate::capture::CaptureHint;
 use crate::engine::WriterMsg;
 use crate::ids::{ContentHash, Namespace};
+use terminusdb_client::CommitId;
 
 use super::AppState;
 
@@ -48,24 +50,135 @@ pub struct HeadReport {
     pub schema_refresh_pending: bool,
 }
 
+/// `?namespace=…&min_version=…` on `/_reactor/head`.
+#[derive(Debug, Default, Deserialize)]
+pub struct HeadParams {
+    /// Report only this namespace, as `org/db/local/branch/<branch>`.
+    ///
+    /// Without it the answer lists every tracked namespace, which is the
+    /// operator's view. A client that latches a commit before a computation
+    /// wants exactly one, and with a database per room the full list is both
+    /// large and almost entirely irrelevant to the caller.
+    pub namespace: Option<String>,
+    /// Do not answer with a watermark older than this commit.
+    ///
+    /// The latch-time half of `X-Reactor-Min-Version`: a read fence is no use
+    /// to a computation that has already pinned itself at a stale commit, so
+    /// the demand has to be satisfiable *before* the pin is chosen. Requires
+    /// `namespace`, since the demand is about one history.
+    pub min_version: Option<String>,
+}
+
 /// `GET /_reactor/head`
 ///
 /// The honest answer to "how far behind is this node", which is what a smart
 /// client or load balancer needs in order to route by replication state instead
 /// of guessing.
-pub async fn head(State(state): State<Arc<AppState>>) -> Json<Vec<HeadReport>> {
-    let mut out = Vec::new();
-    for ns in state.config.namespaces() {
-        let watermark = state.engine.watermark(&ns);
-        out.push(HeadReport {
-            namespace: ns.path(),
-            commit: watermark.as_ref().map(|w| w.commit.as_str().to_owned()),
-            position: watermark.as_ref().map(|w| w.pos.to_string()),
-            classes: state.engine.schema(&ns).classes().count(),
-            schema_refresh_pending: state.engine.schema_refresh_requested(&ns),
-        });
+///
+/// Reports what is **tracked**, not what is configured: a namespace adopted at
+/// run time under `[capture].auto_register` is as real as one in the file, and
+/// omitting it told a client that its database could not be cached when it
+/// could.
+pub async fn head(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<HeadParams>,
+) -> Response {
+    let Some(wanted) = params.namespace else {
+        if params.min_version.is_some() {
+            return (
+                StatusCode::BAD_REQUEST,
+                "min_version is a demand about one history: name the namespace too\n",
+            )
+                .into_response();
+        }
+        let mut namespaces = state.registry.namespaces();
+        namespaces.sort_by_key(Namespace::path);
+        let out: Vec<HeadReport> = namespaces.iter().map(|ns| report(&state, ns)).collect();
+        return Json(out).into_response();
+    };
+
+    let Some(ns) = Namespace::from_path(&wanted) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("`{wanted}` is not a namespace path (org/db/local/branch/<branch>)\n"),
+        )
+            .into_response();
+    };
+    if !state.registry.tracks(&ns) {
+        return (
+            StatusCode::NOT_FOUND,
+            format!(
+                "{ns} is not tracked, so nothing derived from it can be cached. Register it \
+                 with POST /_reactor/namespace, add a [[namespace]] entry, or turn on \
+                 [capture].auto_register and read from it once.\n"
+            ),
+        )
+            .into_response();
     }
-    Json(out)
+
+    if let Some(demanded) = params.min_version {
+        let demanded = CommitId::new(demanded);
+        let policy = state.config.consistency.min_version_policy;
+        let budget = Duration::from_millis(state.config.consistency.min_version_wait_ms);
+        let deadline = Instant::now() + budget;
+        loop {
+            let latched = state.engine.watermark(&ns).map(|w| w.pos);
+            let action = match latched {
+                Some(pos) => super::serve::fence_action(
+                    policy,
+                    state.engine.position_of(&ns, &demanded),
+                    pos,
+                ),
+                // No watermark yet: there is no position to compare against,
+                // and no pin to hand out either.
+                None => super::serve::FenceAction::Wait,
+            };
+            match action {
+                super::serve::FenceAction::Proceed => break,
+                super::serve::FenceAction::Fail => {
+                    return (
+                        StatusCode::PRECONDITION_FAILED,
+                        format!("{ns} has not reached {demanded}\n"),
+                    )
+                        .into_response()
+                }
+                // `ServeStale` answers with what we have, which at latch time
+                // means handing out an older pin on purpose.
+                super::serve::FenceAction::ServeStale => break,
+                super::serve::FenceAction::Wait => {
+                    if Instant::now() >= deadline {
+                        // Out of budget. Say so rather than quietly handing back
+                        // a stale pin: unlike a read, a latch cannot fall
+                        // through to the origin.
+                        return (
+                            StatusCode::PRECONDITION_FAILED,
+                            format!(
+                                "{ns} did not reach {demanded} within \
+                                 {}ms\n",
+                                budget.as_millis()
+                            ),
+                        )
+                            .into_response();
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            }
+        }
+    }
+
+    Json(vec![report(&state, &ns)]).into_response()
+}
+
+/// One namespace's line in the head report.
+fn report(state: &AppState, ns: &Namespace) -> HeadReport {
+    let watermark = state.engine.watermark(ns);
+    HeadReport {
+        namespace: ns.path(),
+        commit: watermark.as_ref().map(|w| w.commit.as_str().to_owned()),
+        position: watermark.as_ref().map(|w| w.pos.to_string()),
+        classes: state.engine.schema(ns).classes().count(),
+        schema_refresh_pending: state.engine.schema_refresh_requested(ns),
+    }
 }
 
 /// `GET /_reactor/metrics`
@@ -208,18 +321,34 @@ pub async fn explain(
 /// What `/_reactor/scope/{id}` answers.
 #[derive(Debug, Serialize)]
 pub struct ScopeReport {
-    /// The namespace the recorded reads were against.
+    /// The namespace the recorded reads were against — the first one, for a
+    /// scope that read several. Kept for compatibility; `namespaces` is the
+    /// whole answer.
     pub namespace: Option<String>,
+    /// Every namespace read, with its terms and its pin.
+    pub namespaces: Vec<ScopeNamespaceReport>,
     /// How many reads have been recorded.
     pub reads: usize,
-    /// The union of their dependency terms, in Reactor's wire encoding.
+    /// The union of their dependency terms, namespace-qualified where the read
+    /// was not of the first namespace.
     pub terms: Vec<String>,
-    /// The commits the reads were pinned at.
+    /// The commits the reads were pinned at, across all namespaces.
     pub commits: Vec<String>,
     /// Why a value may not be stored against this scope, if that is so. Stated
     /// against the scope's own single commit when it has one, which is the
     /// question a developer is actually asking.
     pub refusal: Option<String>,
+}
+
+/// One namespace's line in a [`ScopeReport`].
+#[derive(Debug, Serialize)]
+pub struct ScopeNamespaceReport {
+    /// `org/db/local/branch/<branch>`.
+    pub namespace: String,
+    /// The terms read there, in Reactor's wire encoding.
+    pub terms: Vec<String>,
+    /// The commits those reads were pinned at. More than one is a refusal.
+    pub commits: Vec<String>,
 }
 
 /// `GET /_reactor/scope/{id}`
@@ -236,18 +365,46 @@ pub async fn scope(State(state): State<Arc<AppState>>, Path(id): Path<String>) -
         )
             .into_response();
     };
-    let refusal = record
-        .commits
-        .iter()
-        .next()
-        .map(|commit| terminusdb_client::CommitId::new(commit.clone()))
-        .and_then(|commit| record.refusal(&commit))
-        .or_else(|| record.refusal(&terminusdb_client::CommitId::new("")));
+    // Which namespace is "home" is decided by the store's URL, which this
+    // endpoint does not have. The first one read is the useful guess: it is the
+    // one a single-database computation read, and for a composition the refusal
+    // we want to surface is almost always about the pins rather than about
+    // which database is home.
+    let home = record.namespaces().next().cloned();
+    let refusal = home.as_ref().and_then(|home| {
+        let at = record
+            .commit_for(home)
+            .map(terminusdb_client::CommitId::new)
+            .unwrap_or_else(|| terminusdb_client::CommitId::new(""));
+        record.refusal(home, &at)
+    });
     Json(ScopeReport {
-        namespace: record.ns.as_ref().map(|ns| ns.path()),
+        namespace: home.as_ref().map(Namespace::path),
+        namespaces: record
+            .by_ns
+            .iter()
+            .map(|(ns, reads)| ScopeNamespaceReport {
+                namespace: ns.path(),
+                terms: reads.terms.iter().map(|term| term.to_string()).collect(),
+                commits: reads.commits.iter().cloned().collect(),
+            })
+            .collect(),
         reads: record.reads,
-        terms: record.terms.iter().map(|term| term.to_string()).collect(),
-        commits: record.commits.iter().cloned().collect(),
+        terms: home
+            .as_ref()
+            .map(|home| {
+                record
+                    .deps(home)
+                    .iter()
+                    .map(|dep| dep.to_string())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        commits: record
+            .by_ns
+            .values()
+            .flat_map(|reads| reads.commits.iter().cloned())
+            .collect(),
         refusal,
     })
     .into_response()

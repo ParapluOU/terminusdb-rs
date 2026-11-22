@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{ClassName, DocId, PropName};
+use crate::ids::{ClassName, DocId, Namespace, PropName};
 use crate::predicate::Predicate;
 use crate::schema_index::SchemaIndex;
 
@@ -752,6 +752,77 @@ impl Term {
     }
 }
 
+/// A dependency: a [`Term`], and the namespace whose history it belongs to.
+///
+/// Terms are namespace-free on purpose — they are filed in a per-namespace
+/// index owned by that namespace's single writer, which is what makes the
+/// fill/commit race exactly solvable. A value composed from several databases
+/// still has to name the other ones *somewhere*, and this is that somewhere: a
+/// pair, carried on the wire and resolved at registration time, rather than a
+/// namespace smuggled into the term and filed in the wrong index.
+///
+/// `ns: None` means "the namespace this value is stored in" — the overwhelmingly
+/// common case, and the one that costs nothing.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct Dep {
+    /// The namespace the term belongs to, or `None` for the home namespace.
+    pub ns: Option<Namespace>,
+    /// The term itself.
+    pub term: Term,
+}
+
+impl Dep {
+    /// A dependency on the home namespace.
+    pub fn home(term: Term) -> Dep {
+        Dep { ns: None, term }
+    }
+
+    /// A dependency on another namespace's history.
+    pub fn foreign(ns: Namespace, term: Term) -> Dep {
+        Dep { ns: Some(ns), term }
+    }
+
+    /// Parse the wire encoding: `<org>/<db>/<branch>#<term>`, or a bare term.
+    ///
+    /// Split on the **first** `#`, and only when what precedes it parses as a
+    /// namespace path. A namespace path cannot contain `#`, so this is
+    /// unambiguous whatever the term's own payload turns out to contain —
+    /// which matters, because `pred:` carries JSON.
+    pub fn parse(text: &str) -> Option<Dep> {
+        let text = text.trim();
+        match text.split_once('#') {
+            Some((head, rest)) => {
+                let ns = Namespace::from_path(head.trim())?;
+                Some(Dep::foreign(ns, Term::parse(rest)?))
+            }
+            None => Some(Dep::home(Term::parse(text)?)),
+        }
+    }
+
+    /// Parse a comma-separated list. All-or-nothing, as [`Term::parse_list`].
+    pub fn parse_list(text: &str) -> Option<Vec<Dep>> {
+        let mut out = Vec::new();
+        for element in split_conditions(text) {
+            out.push(Dep::parse(element)?);
+        }
+        if out.is_empty() {
+            return None;
+        }
+        out.sort();
+        out.dedup();
+        Some(out)
+    }
+}
+
+impl std::fmt::Display for Dep {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.ns {
+            Some(ns) => write!(f, "{}#{}", ns.path(), self.term),
+            None => write!(f, "{}", self.term),
+        }
+    }
+}
+
 impl std::str::FromStr for Term {
     type Err = ();
 
@@ -788,7 +859,12 @@ fn split_conditions(text: &str) -> Vec<&str> {
             continue;
         }
         let tail = text[i + 1..].trim_start();
-        if TAGS.iter().any(|tag| tail.starts_with(tag)) {
+        // A namespace-qualified dependency (`org/db/local/branch/b#doc:X`)
+        // starts a condition too, and does not begin with a tag.
+        let qualified = tail
+            .split_once('#')
+            .is_some_and(|(head, _)| Namespace::from_path(head.trim()).is_some());
+        if qualified || TAGS.iter().any(|tag| tail.starts_with(tag)) {
             out.push(text[start..i].trim());
             start = i + 1;
         }

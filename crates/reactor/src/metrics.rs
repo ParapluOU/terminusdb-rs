@@ -99,6 +99,13 @@ metrics! {
         lookup_misses: "Fragment lookups with no version valid at the latched position.",
         commits_applied: "Commits applied to a namespace index.",
         versions_invalidated: "Fragment versions closed by a commit.",
+        foreign_evictions: "Entries dropped because a commit in *another* namespace changed \
+                            something they were composed from. Dropped rather than closed: \
+                            a foreign commit happens at no position on this namespace's axis.",
+        foreign_registrations_refused: "Cross-namespace registrations refused because a \
+                                        commit had already invalidated the value between its \
+                                        reads and its store — the cross-namespace half of the \
+                                        fill/commit race.",
         fills_stored: "Completed fills stored and registered as current.",
         fills_raced: "Completed fills stored with a bounded validity interval because a \
                       commit invalidated them between the pin and the landing.",
@@ -107,6 +114,10 @@ metrics! {
                                fire history needed to validate them.",
         fills_backdated: "Completed fills whose content was unchanged, so the previous \
                           change position was inherited.",
+        difflog_demotions: "Namespaces whose diff-log driver failed repeatedly and was \
+                            replaced by head polling. Non-zero means this server does not \
+                            carry a working `difflog` extension, and capture is paying a log \
+                            walk per event.",
         epoch_bumps: "Non-fast-forward head movements.",
         purges: "Namespaces cleared, by operator action or an undiffable history rewrite.",
         schema_refreshes_requested: "Schema re-derivations requested after a schema commit.",
@@ -187,6 +198,8 @@ metrics! {
     gauges {
         store_bytes: "Approximate bytes held by the fragment store.",
         tracked_keys: "Fragment keys with at least one retained version.",
+        foreign_registrations: "Entries in other namespaces watching this one's terms, i.e. \
+                                the size of the cross-database pivot table.",
         live_predicates: "Distinct filter predicates currently indexed, i.e. referred to by \
                           at least one registered fragment version.",
         watermark_lag_ms: "Milliseconds between observing a commit and publishing the \

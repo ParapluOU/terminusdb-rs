@@ -132,52 +132,85 @@ or `GET /_reactor/scope/{id}`. The reasons are: no read was recorded (your reads
 did not go through `scope.client()`), a read was not tracked (a bypass), a read
 was not pinned, several snapshots, or dependencies could not be narrowed.
 
-## 4. Chunks shared across databases — read this before designing the view
+## 4. Chunks shared across databases
 
-**A derivation is one namespace, one snapshot.** Both halves are deliberate:
-
-- A dependency term carries no namespace. The graph is partitioned per database
-  with a single writer each, which is what makes the fill/commit race exactly
-  solvable — so there is no way to express "dies if `Doc(X)` in room-42 *or*
-  `Doc(Y)` in shared changes", and no writer that could apply it.
-- A scope whose reads were pinned at two commits is refused, because a value
-  computed across two snapshots is true at neither. Two databases commit
-  independently, so one snapshot across both does not exist.
-
-So for a page assembled from a room plus shared chunks, pick one:
-
-**(a) Cache the leaves, recompose per request.** Each database's reads are
-ordinary cached reads as soon as that namespace is tracked. The cost that hurts
-in this layout is round trips, not assembling, so this recovers nearly all of
-the win with no composition at all. Start here.
-
-**(b) Store the composition keyed on the revisions it was built from.**
+A derivation may read **more than one database**. Ask the scope for the other
+one and read it like any other:
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
-struct Envelope { chunks: Vec<(String, String)> }   // (chunk id, revision)
+async fn compute(&self, scope: &Scope) -> anyhow::Result<Rendered> {
+    let publication = scope.client()
+        .get_document(&self.id, scope.spec(), GetOpts::default()).await?;
 
-#[async_trait::async_trait]
-impl Derive for Envelope {
-    type Output = Rendered;
-    const NAME: &'static str = "Envelope";
+    // The shared chunk store, latched at its own commit.
+    let shared = scope.foreign("chunks").await?;
+    let intro = shared.client()
+        .get_document("Chunk/intro", shared.spec(), GetOpts::default()).await?;
 
-    async fn compute(&self, scope: &Scope) -> anyhow::Result<Rendered> {
-        render(&self.chunks, scope).await
-    }
-
-    fn dependencies(&self) -> Dependencies {
-        // Over a known revision set the result is immutable: nothing can change
-        // under it, so there is nothing to invalidate.
-        Dependencies::Independent
-    }
+    Ok(render(&publication, &intro))
 }
 ```
 
-The revision set is in the parameters, so it is in the key; `Independent` says
-the value depends on nothing that can move — a *stronger* statement than any
-dependency term, and one an application that records which revisions it composed
-already has. Store it in the database that publishes the composition.
+The dependencies are still **observed**, not declared: reads of the other
+database are recorded under that database, and a commit there that touches
+something this computation read invalidates the value.
+
+Three things are worth understanding about what that means.
+
+**It is a vector, not a snapshot.** Two databases commit independently, so there
+is no single commit the value is "true at". Each database is latched at its own
+commit, and what Reactor records is *composed of exactly these revisions* —
+checkable, and checked. A scope that reads two commits of **one** database is
+still refused, because that really is incoherent.
+
+**The value lives in one database.** It is stored in the scope's own namespace:
+that is where it is looked up, and authorization is still "whoever may read this
+namespace may read values derived from it". Put the user in the key if a
+derivation mixes users.
+
+**A foreign change evicts rather than closes.** A term carries no namespace — it
+is filed in one namespace's index, owned by that namespace's single writer,
+which is what makes the fill/commit race exactly solvable. So the cross-database
+half is a registration with the *other* writer, and when it fires it deletes the
+entry instead of closing a validity interval: a commit over there happened at no
+position on this database's axis, so there is no honest interval to close, while
+a missing entry is safe at every position. The next reader recomputes. The race
+is closed the same way it is locally — the other writer checks its own fired log
+and registers in one message — so a chunk that changed between your reads and
+your store is reported as `raced` rather than cached stale.
+
+What this costs, and what to do about it:
+
+- **Fan-out is as wide as the chunk is reused.** Editing a chunk that appears in
+  every publication evicts every composite that read it. Lazily — a room nobody
+  opens costs nothing — but if that chunk is in the boilerplate, "pages actually
+  read" is the whole working set. For very widely shared chunks prefer leaving
+  them as leaf reads recomposed per request.
+- **Identical bytes still rebuild the parent.** Child-dirtying is not
+  implemented for derived values, so a chunk edit your renderer normalises away
+  still re-renders every page including it.
+- **A baseline is still cheaper.** Where the revision set is frozen — a print
+  envelope that records which revision of each chunk it was made from — put the
+  revisions in the parameters and declare `Dependencies::Independent`. Nothing
+  can move under it, so there is nothing to invalidate and nothing to register.
+  Note that `Independent` means "no term can fire this", not "detached": the
+  entry still lives in a tracked namespace, is stored against a commit that must
+  still be in `[consistency].commit_ring_capacity`, and goes when that namespace
+  is reset.
+
+### Read-your-writes across the composition
+
+A computation pins itself before its first read, so fencing the reads is too
+late. Demand the freshness at the latch instead:
+
+```rust
+let (_, commit) = client.insert_instance_with_commit_id(&chunk, args).await?;
+let page = cache.get_after(&spec, PageOf { .. }, &commit).await?;
+```
+
+Reactor waits for its watermark to reach that commit and errors rather than
+hand back an older pin. Each demand is about one history, so it composes across
+databases without any cross-database machinery.
 
 ## 5. Two rules that decide your hit rate
 
@@ -198,6 +231,9 @@ one derivation.
 |---|---|
 | is a namespace tracked, and how stale | `GET /_reactor/namespace` |
 | this node's watermark per namespace | `GET /_reactor/head` |
+| one namespace's watermark, no listing | `GET /_reactor/head?namespace=admin/room-42/local/branch/main` |
+| the diff log was demoted to polling | `reactor_difflog_demotions` in `/_reactor/metrics` |
+| how big the cross-database pivot is | `reactor_foreign_registrations` |
 | why a derivation did not cache | `GET /_reactor/scope/{id}` |
 | hit rate, evictions, watermark lag | `GET /_reactor/metrics` |
 | why *this* request was or was not cached | `POST /_reactor/explain` |
@@ -215,8 +251,13 @@ one derivation.
   the same key both compute it. Duplicated work, never a wrong answer.
 - **Child-dirtying is missing.** An inner recomputation that produces identical
   bytes still rebuilds the outer value.
+- **Foreign invalidation is eviction, not closure.** A value composed from
+  another database is deleted when that database changes, so the next reader
+  recomputes from scratch — there is no partial reuse, and no validity interval
+  to serve an older reader from.
 - **The hazard Reactor cannot see:** if your closure reads something that did not
-  go through `scope.client()` — another database, the clock, an env var, an HTTP
-  service — the value is memoized against inputs that can change with no commit,
-  and nothing will tell you. Keep the closure a pure function of what it reads
-  through the scope.
+  go through `scope.client()` or `scope.foreign()` — the clock, an env var, an
+  HTTP service, a database read through a client you built yourself — the value
+  is memoized against inputs that can change with no commit, and nothing will
+  tell you. Keep the closure a pure function of what it reads through the
+  scope.
