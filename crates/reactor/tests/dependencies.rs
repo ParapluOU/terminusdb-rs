@@ -17,6 +17,10 @@
 //! that looks right in a unit test proves nothing about what the origin's diff
 //! actually fires.
 
+//! Raw document reads where a test only needs to know whether a document is
+//! there; the untyped getter is the right one for that.
+#![allow(deprecated)]
+
 mod common;
 
 use anyhow::Result;

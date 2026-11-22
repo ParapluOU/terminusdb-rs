@@ -10,6 +10,10 @@
 //! * `GET /api/schema/<path>` → `get_class_frame` / `get_json_schema`
 //! * GraphQL's index-answered unfiltered `_count`
 
+// Reads documents as raw JSON on purpose: these tests assert what the *server*
+// stored and returned, which is the one question a typed getter cannot answer.
+#![allow(deprecated)]
+
 use anyhow::Result;
 use terminusdb_bin::TerminusDBServer;
 use terminusdb_client::*;
@@ -101,7 +105,6 @@ async fn new_document_list_params_are_honoured() -> Result<()> {
             }
 
             // id_prefix: only the two alpha members.
-            #[allow(deprecated)] // exercising the raw endpoint is the point of this test
             let docs = client
                 .get_documents(
                     vec![],

@@ -63,12 +63,12 @@ derivation! {
     -> Shout
     |this, scope| {
         note_run(&scope.spec().db);
-        let document = scope
+        let mut de = terminusdb_client::DefaultTDBDeserializer;
+        let person: Person = scope
             .client()
-            .get_document(&this.id, scope.spec(), GetOpts::default())
+            .get_instance(&this.id, scope.spec(), &mut de)
             .await?;
-        let name = document["name"].as_str().unwrap_or_default().to_uppercase();
-        Ok(Shout { name })
+        Ok(Shout { name: person.name.to_uppercase() })
     }
 }
 
@@ -573,19 +573,20 @@ impl Derive for PageOf {
 
     async fn compute(&self, scope: &Scope) -> Result<Page> {
         note_run(&scope.spec().db);
-        let local = scope
+        let mut de = terminusdb_client::DefaultTDBDeserializer;
+        let local: Person = scope
             .client()
-            .get_document(&self.id, scope.spec(), GetOpts::default())
+            .get_instance(&self.id, scope.spec(), &mut de)
             .await?;
         // The other database, latched at its own commit.
         let shared = scope.foreign(&self.shared_db).await?;
-        let chunk = shared
+        let chunk: Person = shared
             .client()
-            .get_document(&self.chunk, shared.spec(), GetOpts::default())
+            .get_instance(&self.chunk, shared.spec(), &mut de)
             .await?;
         Ok(Page {
-            local: local["name"].as_str().unwrap_or_default().to_owned(),
-            shared: chunk["name"].as_str().unwrap_or_default().to_owned(),
+            local: local.name,
+            shared: chunk.name,
         })
     }
 }

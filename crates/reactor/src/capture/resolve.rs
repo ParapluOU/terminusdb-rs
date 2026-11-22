@@ -125,6 +125,10 @@ impl TerminusResolver {
     /// `unfold` is deliberately off: we want the stored shape, where links are
     /// id references. An unfolded read would embed whole documents and the link
     /// targets would be harder, not easier, to extract.
+    // Deliberately untyped: capture reads documents of whatever class a commit
+    // touched, to extract their link targets. There is no single `Target` to
+    // deserialize into, and we want the stored shape rather than a model's.
+    #[allow(deprecated)]
     async fn read_at(
         &self,
         ns: &Namespace,
@@ -132,7 +136,8 @@ impl TerminusResolver {
         id: &str,
     ) -> anyhow::Result<Option<serde_json::Value>> {
         let spec = ns.to_commit_spec(commit);
-        self.clients.for_ns(ns)
+        self.clients
+            .for_ns(ns)
             .get_document_if_exists(id, &spec, GetOpts::default())
             .await
     }
@@ -389,7 +394,8 @@ impl PinnedReadGate {
 #[async_trait]
 impl ReadinessGate for PinnedReadGate {
     async fn await_readable(&self, ns: &Namespace, commit: &CommitId) -> anyhow::Result<()> {
-        self.clients.for_ns(ns)
+        self.clients
+            .for_ns(ns)
             .get_changes(&ns.to_commit_spec(commit), Some(0))
             .await?;
         Ok(())

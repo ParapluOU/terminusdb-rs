@@ -44,7 +44,10 @@ impl TerminusDBMcpHandler {
         .await
     }
 
-    pub(crate) async fn get_connection_config(&self, provided: Option<ConnectionConfig>) -> ConnectionConfig {
+    pub(crate) async fn get_connection_config(
+        &self,
+        provided: Option<ConnectionConfig>,
+    ) -> ConnectionConfig {
         if let Some(config) = provided {
             return config;
         }
@@ -174,7 +177,10 @@ impl TerminusDBMcpHandler {
         }
     }
 
-    pub(crate) async fn list_databases(&self, request: ListDatabasesTool) -> Result<serde_json::Value> {
+    pub(crate) async fn list_databases(
+        &self,
+        request: ListDatabasesTool,
+    ) -> Result<serde_json::Value> {
         info!("Listing databases");
 
         let config = self.get_connection_config(request.connection).await;
@@ -294,7 +300,10 @@ impl TerminusDBMcpHandler {
         }
     }
 
-    pub(crate) async fn reset_database(&self, request: ResetDatabaseTool) -> Result<serde_json::Value> {
+    pub(crate) async fn reset_database(
+        &self,
+        request: ResetDatabaseTool,
+    ) -> Result<serde_json::Value> {
         info!("Resetting database: {}", request.database);
 
         let config = self.get_connection_config(request.connection).await;
@@ -310,6 +319,10 @@ impl TerminusDBMcpHandler {
         }))
     }
 
+    // Deliberately untyped: this tool hands arbitrary documents to a model as
+    // JSON, so there is no `TerminusDBModel` to ask for. The typed getters
+    // exist for code that knows what it is fetching; this does not.
+    #[allow(deprecated)]
     pub(crate) async fn get_document(&self, request: GetDocumentTool) -> Result<serde_json::Value> {
         info!("Retrieving document: {}", request.document_id);
 
@@ -360,7 +373,10 @@ impl TerminusDBMcpHandler {
         }
     }
 
-    pub(crate) async fn handle_query_log(&self, request: QueryLogTool) -> Result<serde_json::Value> {
+    pub(crate) async fn handle_query_log(
+        &self,
+        request: QueryLogTool,
+    ) -> Result<serde_json::Value> {
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
 

@@ -20,8 +20,9 @@ derivation! {
     -> Overview
     |this, scope| {
         // Ordinary reads, through an ordinary client.
-        let publication = scope.client()
-            .get_document(&this.id, scope.spec(), GetOpts::default()).await?;
+        let mut de = DefaultTDBDeserializer;
+        let publication: Publication = scope.client()
+            .get_instance(&this.id, scope.spec(), &mut de).await?;
 
         // Your transformation. Reactor cannot see inside it and does not need to.
         Ok(render(&publication, this.limit))

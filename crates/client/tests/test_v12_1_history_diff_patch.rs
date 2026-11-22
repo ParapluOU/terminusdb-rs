@@ -8,6 +8,10 @@
 //! * typed `Insert`/`Delete` patch operations for `POST /api/patch`, including
 //!   `@capture`/`@ref`.
 
+// Reads documents as raw JSON on purpose: these tests assert what the *server*
+// stored and returned, which is the one question a typed getter cannot answer.
+#![allow(deprecated)]
+
 use anyhow::Result;
 use futures_util::StreamExt;
 use serde_json::json;
@@ -66,13 +70,15 @@ async fn history_diff_complete_and_time_filters() -> Result<()> {
     server
         .with_db_schema::<(City,), _, _, _>("v12_1_history", |client, spec| async move {
             let args = DocumentInsertArgs::from(spec.clone());
-            client.insert_instance(&city("w", "Warsaw", 1)?, args.clone()).await?;
-            client.insert_instance(&city("w", "Warsaw", 2)?, args.clone()).await?;
+            client
+                .insert_instance(&city("w", "Warsaw", 1)?, args.clone())
+                .await?;
+            client
+                .insert_instance(&city("w", "Warsaw", 2)?, args.clone())
+                .await?;
 
             // Plain history: two commits touched the document.
-            let plain = client
-                .get_document_history("City/w", &spec, None)
-                .await?;
+            let plain = client.get_document_history("City/w", &spec, None).await?;
             println!("plain history: {} entries", plain.len());
             assert!(plain.len() >= 2, "expected at least two commits: {plain:?}");
             assert!(
@@ -203,7 +209,10 @@ async fn history_streaming_matches_the_collected_history() -> Result<()> {
                 streamed.iter().map(|e| e.identifier.to_string()).collect();
             let collected_ids: Vec<String> =
                 collected.iter().map(|e| e.identifier.to_string()).collect();
-            assert_eq!(streamed_ids, collected_ids, "and the same commits, in order");
+            assert_eq!(
+                streamed_ids, collected_ids,
+                "and the same commits, in order"
+            );
 
             // The streaming path honours diff=true too.
             let stream = client
@@ -431,13 +440,8 @@ async fn typed_patch_operations() -> Result<()> {
                 )
                 .await?;
             println!("captured insert -> {captured}");
-            #[allow(deprecated)] // exercising the raw endpoint is the point of this test
             let cities = client
-                .get_documents(
-                    vec![],
-                    &spec,
-                    GetOpts::default().with_type_filter::<City>(),
-                )
+                .get_documents(vec![], &spec, GetOpts::default().with_type_filter::<City>())
                 .await?;
             let names: Vec<&str> = cities
                 .iter()

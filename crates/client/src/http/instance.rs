@@ -1113,6 +1113,9 @@ impl super::client::TerminusDBHttpClient {
             opts.unfold = true;
         }
 
+        // The typed path is implemented on top of the discouraged raw one;
+        // that is the point of deprecating it rather than removing it.
+        #[allow(deprecated)]
         let json_instance_doc = self.get_document(&doc_id, spec, opts).await?;
 
         let res = deserializer.from_instance(json_instance_doc.clone());
@@ -1178,6 +1181,9 @@ impl super::client::TerminusDBHttpClient {
         let doc_id = format_id::<Target>(id);
         let opts = GetOpts::default().with_unfold(true);
 
+        // The typed path is implemented on top of the discouraged raw one;
+        // that is the point of deprecating it rather than removing it.
+        #[allow(deprecated)]
         let json_instance_doc = self.get_document(&doc_id, spec, opts).await?;
 
         let res = deserializer.from_instance(json_instance_doc.clone());
@@ -1246,6 +1252,9 @@ impl super::client::TerminusDBHttpClient {
     {
         let doc_id = format_id::<Target>(id);
 
+        // The typed path is implemented on top of the discouraged raw one;
+        // that is the point of deprecating it rather than removing it.
+        #[allow(deprecated)]
         let json_instance_doc = self.get_document(&doc_id, spec, opts).await?;
 
         let res = deserializer.from_instance(json_instance_doc.clone());
@@ -1326,6 +1335,7 @@ impl super::client::TerminusDBHttpClient {
             opts.unfold = true;
         }
 
+        #[allow(deprecated)]
         let response = self.get_document_with_headers(&doc_id, spec, opts).await?;
 
         // Get the document from the response (using Deref)
@@ -1401,7 +1411,9 @@ impl super::client::TerminusDBHttpClient {
             opts.unfold = true;
         }
 
-        match self.get_document_if_exists(&doc_id, spec, opts).await? {
+        #[allow(deprecated)]
+        let found = self.get_document_if_exists(&doc_id, spec, opts).await?;
+        match found {
             Some(json_instance_doc) => {
                 let res = deserializer.from_instance(json_instance_doc.clone());
 

@@ -3,6 +3,10 @@
 //! against a 12.1 server: insert a model with a high-precision decimal, read it
 //! back, and assert the value round-trips exactly (no f64 truncation).
 
+// Reads documents as raw JSON on purpose: these tests assert what the *server*
+// stored and returned, which is the one question a typed getter cannot answer.
+#![allow(deprecated)]
+
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {

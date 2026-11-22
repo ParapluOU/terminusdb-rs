@@ -9,6 +9,10 @@
 //! implementation, the test says so rather than being bent to pass: a
 //! failing-but-accurate spike is worth more than a passing fiction.
 
+//! Raw document reads throughout: a spike asks what the *server* returns, so
+//! the untyped getters are the right ones here.
+#![allow(deprecated)]
+
 mod common;
 
 use anyhow::Result;

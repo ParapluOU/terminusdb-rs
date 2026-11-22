@@ -3,6 +3,10 @@
 //! it, then apply the main→feature diff onto main (squash-merge) and confirm the
 //! document lands on main.
 
+// Reads documents as raw JSON on purpose: these tests assert what the *server*
+// stored and returned, which is the one question a typed getter cannot answer.
+#![allow(deprecated)]
+
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {
@@ -72,7 +76,10 @@ mod tests {
                 let doc = client
                     .get_document("Note/n1", &main, GetOpts::default())
                     .await?;
-                assert_eq!(doc.get("text").and_then(|v| v.as_str()), Some("from feature"));
+                assert_eq!(
+                    doc.get("text").and_then(|v| v.as_str()),
+                    Some("from feature")
+                );
                 Ok(())
             })
             .await

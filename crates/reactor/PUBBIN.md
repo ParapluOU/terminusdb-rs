@@ -95,8 +95,9 @@ derivation! {
     -> Overview
     |this, scope| {
         // Ordinary reads through an ordinary client.
-        let publication = scope.client()
-            .get_document(&this.id, scope.spec(), GetOpts::default()).await?;
+        let mut de = DefaultTDBDeserializer;
+        let publication: Publication = scope.client()
+            .get_instance(&this.id, scope.spec(), &mut de).await?;
         // Your transformation. Reactor cannot see inside it and does not need to.
         Ok(render(&publication, this.limit))
     }
@@ -139,13 +140,14 @@ one and read it like any other:
 
 ```rust
 async fn compute(&self, scope: &Scope) -> anyhow::Result<Rendered> {
-    let publication = scope.client()
-        .get_document(&self.id, scope.spec(), GetOpts::default()).await?;
+    let mut de = DefaultTDBDeserializer;
+    let publication: Publication = scope.client()
+        .get_instance(&self.id, scope.spec(), &mut de).await?;
 
     // The shared chunk store, latched at its own commit.
     let shared = scope.foreign("chunks").await?;
-    let intro = shared.client()
-        .get_document("Chunk/intro", shared.spec(), GetOpts::default()).await?;
+    let intro: Chunk = shared.client()
+        .get_instance("Chunk/intro", shared.spec(), &mut de).await?;
 
     Ok(render(&publication, &intro))
 }
