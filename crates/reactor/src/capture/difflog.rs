@@ -81,10 +81,8 @@ impl DiffLog {
     /// The graph selector leads rather than trails here, unlike `_commits`;
     /// that is forced by the server's router and documented there.
     fn endpoint(&self, ns: &Namespace) -> Result<url::Url, url::ParseError> {
-        self.upstream.join(&format!(
-            "/api/graphql/_difflog/{}/{}",
-            ns.org, ns.db
-        ))
+        self.upstream
+            .join(&format!("/api/graphql/_difflog/{}/{}", ns.org, ns.db))
     }
 
     /// Ask for one page. `after` is the commit we believe sits at `from - 1`,
@@ -134,6 +132,36 @@ impl DiffLog {
             .ok_or_else(|| anyhow::anyhow!("diff log returned neither data nor errors"))
     }
 }
+
+/// How many consecutive failed polls mean "this driver does not work here".
+///
+/// Polls back off exponentially, so five is tens of seconds of trying — long
+/// enough that a restarting node is not mistaken for a node without the feed,
+/// short enough that a namespace is not stale for long.
+const UNUSABLE_AFTER: u32 = 5;
+
+/// The diff log has failed often enough to be treated as unavailable.
+///
+/// Carried as an error rather than returned, because the driver is a stream:
+/// this is how it tells capture to demote it to head polling. Capture
+/// recognizes it by type, not by message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unusable {
+    /// Consecutive failures at the point the verdict was reached.
+    pub consecutive: u32,
+}
+
+impl std::fmt::Display for Unusable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the diff log failed {} times in a row; treating it as unavailable",
+            self.consecutive
+        )
+    }
+}
+
+impl std::error::Error for Unusable {}
 
 #[derive(Deserialize)]
 struct Envelope {
@@ -354,6 +382,18 @@ impl CommitSource for DiffLog {
                     Err(error) => {
                         tracing::debug!(%ns, error = %error, "diff log poll failed; backing off");
                         failures = failures.saturating_add(1);
+                        if failures == UNUSABLE_AFTER {
+                            // Say, once, that this is no longer a bad patch but
+                            // a driver that does not work here, so capture can
+                            // fall back to head polling. Without this the
+                            // availability probe's `Unknown` verdict — an
+                            // upstream too old to report extensions — leaves a
+                            // namespace backing off forever, which for a
+                            // namespace whose *only* driver is the feed means
+                            // it silently stops invalidating.
+                            yield Err(anyhow::Error::new(Unusable { consecutive: failures })
+                                .context(format!("{error}")));
+                        }
                     }
                 }
             }
@@ -426,7 +466,10 @@ mod tests {
         // the subscription plugin's catch-all under /api/graphql.
         assert_eq!(
             "http://127.0.0.1:1/api/graphql/_difflog/admin/people",
-            feed(Duration::from_millis(1)).endpoint(&ns()).unwrap().as_str()
+            feed(Duration::from_millis(1))
+                .endpoint(&ns())
+                .unwrap()
+                .as_str()
         );
     }
 

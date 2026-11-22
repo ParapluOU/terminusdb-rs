@@ -1149,6 +1149,11 @@ impl Supervisor {
         // * back off between attempts instead of reopening every poll interval.
         let mut classes = class_fingerprint(&self.engine.schema(&ns));
         let mut demoted = false;
+        // Set when the diff log has failed often enough to be treated as
+        // absent. Sticky for the life of the task, like `demoted`: a driver
+        // that does not work here will not start working on the next rebuild,
+        // and retrying it costs the namespace its freshness every time.
+        let mut feed_demoted = false;
         let mut backoff =
             std::time::Duration::from_millis(self.config.capture.poll_interval_ms.max(100));
 
@@ -1163,8 +1168,8 @@ impl Supervisor {
             // should fall back now, while an unreachable node is transient and
             // must NOT cost us the better driver. Inferring either from a
             // failed poll conflates them.
-            let mut feed_fallback = false;
-            if driver.reads_diff_log() {
+            let mut feed_fallback = feed_demoted;
+            if driver.reads_diff_log() && !feed_demoted {
                 let probe = difflog::DiffLog::new(
                     self.http.clone(),
                     match url::Url::parse(&self.config.upstream.url) {
@@ -1206,7 +1211,7 @@ impl Supervisor {
                 );
                 sources.push(poll.subscribe(&ns, after.clone()));
             }
-            if driver.reads_diff_log() && !feed_fallback {
+            if driver.reads_diff_log() && !feed_fallback && !feed_demoted {
                 // One source, and it supplies parents — so unlike the head
                 // poll it needs no reconciling walk behind it.
                 let supervisor = Arc::clone(&self);
@@ -1285,6 +1290,26 @@ impl Supervisor {
                                     );
                                     self.engine.metrics().subscription_demotions.inc();
                                     demoted = true;
+                                    break;
+                                }
+                                if err.chain().any(|cause| cause.is::<difflog::Unusable>()) {
+                                    // The feed is not working here and is not
+                                    // going to start. Rebuild with head
+                                    // polling rather than keep backing off:
+                                    // for a namespace whose only driver is the
+                                    // feed, backing off forever means it stops
+                                    // invalidating without ever saying so.
+                                    tracing::warn!(
+                                        %ns,
+                                        error = %err,
+                                        "the diff log is not usable on this server; falling \
+                                         back to head polling for this namespace. Capture \
+                                         still works, but every event costs a log walk — a \
+                                         server carrying a working `difflog` extension \
+                                         removes that."
+                                    );
+                                    self.engine.metrics().difflog_demotions.inc();
+                                    feed_demoted = true;
                                     break;
                                 }
                                 tracing::debug!(%ns, error = %err, "capture driver error");
