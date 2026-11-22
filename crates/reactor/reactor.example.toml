@@ -92,6 +92,13 @@ write_fence_ms = 2000
 # while a just-revoked one costs us at most this long (POST /_reactor/invalidate
 # clears grants immediately if you need it sooner).
 auth_ttl_secs = 30
+# How many `commit -> position` pairs each namespace remembers. This is how far
+# back a question *about a commit* can be answered: a min-version fence naming
+# an older commit is treated as unreached, and a derived value stored with an
+# older `X-Reactor-At` is refused because it cannot be placed in time. It does
+# NOT bound how far back a commit-pinned read may be cached — a pinned answer is
+# immutable, so it is valid at every position and needs none.
+commit_ring_capacity = 1024
 
 [capture]
 # How commits are noticed. Drivers are untrusted: the watermark only advances

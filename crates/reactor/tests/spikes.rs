@@ -442,3 +442,63 @@ async fn spike_what_does_unfold_embed() -> Result<()> {
         })
         .await
 }
+
+/// **Q: does a commit-pinned read carry a `TerminusDB-Data-Version` header, and
+/// what commit does it name?**
+///
+/// This decides whether Reactor's commit ring bounds how far back a pinned read
+/// can be cached. `serve::store` prefers the commit the response came from, and
+/// a data-version naming a commit the ring has already evicted makes the entry
+/// `uncacheable("unknown-data-version")` — even though a pinned answer is
+/// immutable and needs no position at all. An application that reads chunks at
+/// deliberately old revisions (the shared-chunk layout in `PUBBIN.md`) would
+/// then lose caching on exactly its oldest, most-reused reads.
+///
+/// If the node sends no data-version for a pinned read, the `None if immutable`
+/// arm applies instead and the ring never enters into it.
+#[tokio::test]
+async fn spike_does_a_pinned_read_carry_a_data_version() -> Result<()> {
+    let server = common::upstream().await?;
+    let up = &server;
+    server
+        .with_schema::<(Person,), _, _, _>("rx_spike_pinned_dv", |direct, spec| async move {
+            let args = DocumentInsertArgs::from(spec.clone());
+            direct
+                .insert_instance(&person("alice", "Ann", 30)?, args.clone())
+                .await?;
+            let first = direct.get_latest_commit_id(&spec).await?;
+            direct
+                .insert_instance(&person("alice", "Anne", 31)?, args)
+                .await?;
+            let second = direct.get_latest_commit_id(&spec).await?;
+
+            let live = up
+                .get(&format!("/api/document/admin/{}?id=Person/alice", spec.db))
+                .await?;
+            let pinned = up
+                .get(&format!(
+                    "/api/document/admin/{}/local/commit/{}?id=Person/alice",
+                    spec.db, first
+                ))
+                .await?;
+
+            println!(
+                "FINDING pinned data-version:\n  \
+                 commits:        first={first} second={second}\n  \
+                 live read:      status={} data-version={:?}\n  \
+                 pinned at first: status={} data-version={:?}",
+                live.status,
+                live.header("terminusdb-data-version"),
+                pinned.status,
+                pinned.header("terminusdb-data-version"),
+            );
+            assert_eq!(pinned.status, 200, "body: {}", pinned.text());
+            assert!(
+                pinned.text().contains("Ann") && !pinned.text().contains("Anne"),
+                "the pinned read must answer as of `first`: {}",
+                pinned.text()
+            );
+            Ok(())
+        })
+        .await
+}

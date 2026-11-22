@@ -267,6 +267,18 @@ pub struct ConsistencyConfig {
     /// how long a revoked capability can still read the cache; a freshly
     /// granted one is never delayed. 30s is the documented tradeoff.
     pub auth_ttl_secs: u64,
+    /// How many `commit -> position` pairs each namespace remembers.
+    ///
+    /// This is how far back a question about a commit can be answered: an
+    /// `X-Reactor-Min-Version` naming a commit older than the ring is treated
+    /// as unreached (never satisfied, see `fence_action`), and a derived value
+    /// stored with an `X-Reactor-At` older than the ring is refused because it
+    /// cannot be placed in time.
+    ///
+    /// It does **not** bound how far back a commit-pinned read may be cached:
+    /// a pinned answer is immutable, so it is valid at every position and needs
+    /// none.
+    pub commit_ring_capacity: usize,
 }
 
 impl Default for ConsistencyConfig {
@@ -276,6 +288,7 @@ impl Default for ConsistencyConfig {
             min_version_wait_ms: 500,
             write_fence_ms: 2000,
             auth_ttl_secs: 30,
+            commit_ring_capacity: 1024,
         }
     }
 }
@@ -711,6 +724,7 @@ impl Config {
             }),
             max_versions_per_key: self.cache.max_versions_per_key,
             max_tracked_keys: self.cache.max_tracked_keys,
+            commit_ring_capacity: self.consistency.commit_ring_capacity,
             predicates: EvalLimits {
                 max_evaluations: self.predicates.max_evaluations_per_commit,
                 max_predicates: self.predicates.max_predicates,

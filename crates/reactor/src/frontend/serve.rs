@@ -135,9 +135,17 @@ pub fn wants_streaming(headers: &HeaderMap) -> bool {
 /// the body, so there is no URL to pin. The `/api/woql/<path>` form is fine.
 pub fn pinned_path(target: &Target, commit: &CommitId, query: &str) -> Option<String> {
     let path = match target {
-        // Already pinned: the client asked for a fixed commit.
-        Target::Pinned { endpoint, ns, .. } => {
-            format!("/api/{}/{}", endpoint, ns.commit_path(commit))
+        // Already pinned: the client asked for a fixed commit, and that is the
+        // commit we must fetch. `commit` is where *we* would have pinned an
+        // unpinned request — the watermark — and using it here would answer a
+        // pinned read with the live state, then cache that answer under the
+        // commit-qualified key, where it would be wrong forever.
+        Target::Pinned {
+            endpoint,
+            ns,
+            commit: pin,
+        } => {
+            format!("/api/{}/{}", endpoint, ns.commit_path(pin))
         }
         Target::Branch { endpoint, ns } => {
             format!("/api/{}/{}", endpoint, ns.commit_path(commit))
@@ -1725,6 +1733,16 @@ async fn execute_fill(
         Some(returned) if returned != &watermark.commit => {
             match state.engine.position_of(&ns, returned) {
                 CommitLookup::Applied(pos) => (pos, returned.clone()),
+                // An immutable answer is valid at *every* position, so it does
+                // not need one: a commit-pinned read of a commit the ring has
+                // already forgotten is still perfectly cacheable, and refusing
+                // it would lose caching on exactly the oldest — and therefore
+                // most reused — pinned reads. The watermark is used as `from`
+                // only to place the entry on this namespace's axis; the commit
+                // recorded is still the pinned one, so the entry explains
+                // itself. Deps are empty for an immutable entry, so nothing can
+                // close the interval either.
+                CommitLookup::Unknown if immutable => (watermark.pos, returned.clone()),
                 // We have no position for it, so we cannot say when it is valid.
                 CommitLookup::Unknown => return Ok(uncacheable(upstream, "unknown-data-version")),
             }
@@ -1987,8 +2005,12 @@ mod tests {
     #[test]
     fn an_already_pinned_request_keeps_its_pin() {
         let target = Target::parse("/api/woql/admin/mydb/local/commit/abc123");
+        // The second argument is where an *unpinned* request would have been
+        // pinned — the watermark. It must not win: passing the same commit for
+        // both, as this test once did, cannot tell the two apart, and the
+        // difference is a pinned read answered with the live state.
         assert_eq!(
-            pinned_path(&target, &CommitId::new("abc123"), ""),
+            pinned_path(&target, &CommitId::new("later456"), ""),
             Some("/api/woql/admin/mydb/local/commit/abc123".to_owned())
         );
     }

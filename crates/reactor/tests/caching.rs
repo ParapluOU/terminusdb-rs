@@ -319,6 +319,12 @@ async fn a_pinned_read_survives_later_commits() -> Result<()> {
             );
 
             let first = reactor.get(&pinned).await?;
+            println!(
+                "DEBUG via reactor: status={} cache={} body={}",
+                first.status,
+                first.cache_status(),
+                first.text()
+            );
             assert_eq!(first.status, 200, "body: {}", first.text());
             assert!(first.text().contains("Ann"), "got {}", first.text());
             let second = reactor.get(&pinned).await?;
@@ -352,6 +358,138 @@ async fn a_pinned_read_survives_later_commits() -> Result<()> {
                 after.text().contains("Ann") && !after.text().contains("Anne"),
                 "and it must still show the value as of that commit: {}",
                 after.text()
+            );
+            Ok(())
+        })
+        .await
+}
+
+/// A pinned read of a commit that is **not** the head answers as of that
+/// commit.
+///
+/// Reactor pins every fill, so an unpinned request is repointed at the
+/// watermark. A request the client already pinned must keep its own pin
+/// instead: re-pinning it at the watermark answers with the live state and then
+/// stores that answer under the commit-qualified key, where nothing can ever
+/// invalidate it — the pinned read would be wrong forever.
+///
+/// The case the older `a_pinned_read_survives_later_commits` cannot see: there
+/// the first read happens while the pin *is* the head, so both behaviours agree.
+#[tokio::test]
+async fn a_pinned_read_answers_as_of_its_own_commit() -> Result<()> {
+    let server = common::upstream().await?;
+    let up = &server;
+    server
+        .with_schema::<(Person,), _, _, _>("rx_cache_pinned_old", |direct, spec| async move {
+            let args = DocumentInsertArgs::from(spec.clone());
+            direct
+                .insert_instance(&person("alice", "Ann", 30)?, args.clone())
+                .await?;
+
+            let reactor = Reactor::start(up, &spec.db).await?;
+            let pinned_at = reactor.head().expect("a watermark");
+
+            let before = reactor.head();
+            direct
+                .insert_instance(&person("alice", "Zoe", 31)?, args)
+                .await?;
+            assert!(reactor
+                .await_watermark_change(before.as_ref())
+                .await
+                .is_some());
+
+            // First read of this pin, and the pin is now behind the head.
+            let pinned = format!(
+                "/api/document/admin/{}/local/commit/{}?id=Person/alice",
+                spec.db, pinned_at
+            );
+            let answer = reactor.get(&pinned).await?;
+            assert_eq!(answer.status, 200, "body: {}", answer.text());
+            assert_eq!(
+                answer.body,
+                up.get(&pinned).await?.body,
+                "a pinned read must be the bytes the node would have returned at that \
+                 commit, not the live ones"
+            );
+            assert!(
+                !answer.text().contains("Zoe"),
+                "it answered with the live state: {}",
+                answer.text()
+            );
+            Ok(())
+        })
+        .await
+}
+
+/// A pinned read of a commit the commit ring has forgotten is still cacheable.
+///
+/// The ring bounds how far back a *question about a position* can be answered
+/// (a min-version fence, a derived value's `X-Reactor-At`). An immutable answer
+/// needs no position at all: it is valid at every one of them. Conflating the
+/// two cost caching on exactly the oldest pinned reads — which, for an
+/// application that composes pages from chunks at deliberately frozen
+/// revisions, is the hot path.
+///
+/// `spike_does_a_pinned_read_carry_a_data_version` is why this is not
+/// hypothetical: the node answers a pinned read with
+/// `TerminusDB-Data-Version: commit:<the pinned commit>`, so the store path
+/// does look the commit up.
+#[tokio::test]
+async fn a_pinned_read_caches_past_the_commit_ring() -> Result<()> {
+    let server = common::upstream().await?;
+    let up = &server;
+    server
+        .with_schema::<(Person,), _, _, _>("rx_cache_pinned_ring", |direct, spec| async move {
+            let args = DocumentInsertArgs::from(spec.clone());
+            direct
+                .insert_instance(&person("alice", "Ann", 30)?, args.clone())
+                .await?;
+
+            // A ring of two, so three later commits are guaranteed to evict the
+            // commit we pin at.
+            let reactor = Reactor::start_with(up, &spec.db, |config| {
+                config.consistency.commit_ring_capacity = 2;
+            })
+            .await?;
+            let pinned_at = reactor.head().expect("a watermark");
+
+            for (name, age) in [("Anne", 31), ("Annie", 32), ("Ann-Marie", 33)] {
+                let before = reactor.head();
+                direct
+                    .insert_instance(&person("alice", name, age)?, args.clone())
+                    .await?;
+                assert!(
+                    reactor
+                        .await_watermark_change(before.as_ref())
+                        .await
+                        .is_some(),
+                    "the commit for {name} never reached the watermark"
+                );
+            }
+
+            let pinned = format!(
+                "/api/document/admin/{}/local/commit/{}?id=Person/alice",
+                spec.db, pinned_at
+            );
+            // The node's own answer, as the thing Reactor's must match.
+            let direct_pinned = up.get(&pinned).await?;
+            let first = reactor.get(&pinned).await?;
+            assert_eq!(first.status, 200, "body: {}", first.text());
+            assert!(
+                first.text().contains("Ann") && !first.text().contains("Ann-Marie"),
+                "the pinned read must answer as of the pin: {}",
+                first.text()
+            );
+            let second = reactor.get(&pinned).await?;
+            assert!(
+                second.is_hit(),
+                "a pinned read of an evicted commit must still cache, got {}",
+                second.cache_status()
+            );
+            assert_eq!(first.body, second.body, "and byte-identically");
+            assert_eq!(
+                first.body, direct_pinned.body,
+                "and it must be the bytes the node would have returned"
             );
             Ok(())
         })
