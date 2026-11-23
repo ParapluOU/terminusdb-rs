@@ -250,7 +250,7 @@ fn hit_response_tagged(
         }
         if let Some(data_version) = &version.meta.data_version {
             if let Some(value) = proxy::header_value(data_version) {
-                headers.insert("terminusdb-data-version", value);
+                headers.insert(DATA_VERSION, value);
             }
         }
         if let Some(value) = proxy::header_value(&etag) {
@@ -392,6 +392,10 @@ fn relay(
         .body(Body::from(upstream.body))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
+
+/// The header TerminusDB states a read's commit in, and the token a write names
+/// as the head it expects.
+const DATA_VERSION: &str = "terminusdb-data-version";
 
 /// A bad-gateway response for an upstream we could not reach.
 fn bad_gateway(state: &AppState, reason: &str) -> Response {
@@ -568,7 +572,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, request: Request<Body>) 
             augment,
             decompose,
         } => {
-            serve_read(
+            let response = serve_read(
                 &state,
                 &request,
                 &ns,
@@ -581,9 +585,48 @@ pub async fn handle(State(state): State<Arc<AppState>>, request: Request<Body>) 
                 augment,
                 decompose,
             )
-            .await
+            .await;
+            as_the_client_asked(&view.target, response)
         }
     }
+}
+
+/// Label the `TerminusDB-Data-Version` after the resource the **client**
+/// addressed, not the one we happened to read.
+///
+/// Every cacheable read is issued upstream pinned —
+/// `<org>/<db>/local/commit/<id>`, invariant 2, so that a fragment is the value
+/// at that commit — and TerminusDB labels a pinned read `commit:<id>` where it
+/// labels a branch read `branch:<id>`. The commit is the same; the name is of
+/// whatever was read. Echoing that back verbatim tells a client which asked for
+/// a branch something the branch read would never have said, and the client has
+/// no way to know its request was rewritten. That is this proxy failing to be
+/// transparent, so it is this proxy's to repair.
+///
+/// It is not cosmetic. The data version is TerminusDB's optimistic-concurrency
+/// token: a client reads, computes, and writes back naming what it read as the
+/// head it expects. Handed `commit:<id>` it sends `branch:commit:<id>`, which
+/// the server cannot parse, and the write is refused — every write, for as long
+/// as the cache is in front of the database. Pubbin hit exactly this on
+/// 2026-11-23: no document could be saved at all, and because its room host
+/// retried for ever the edits stayed live in memory and looked kept while
+/// nothing was stored.
+///
+/// A request that was itself pinned keeps `commit:<id>`: that is what its
+/// client addressed and what the upstream would have told it. A bypassed
+/// request is not touched at all — upstream saw the client's own path.
+fn as_the_client_asked(target: &Target, mut response: Response) -> Response {
+    let Target::Branch { .. } = target else { return response };
+    let headers = response.headers_mut();
+    let Some(said) = headers.get(DATA_VERSION).and_then(|value| value.to_str().ok()) else { return response };
+    let Some(commit) = proxy::parse_data_version(said) else { return response };
+    let branch = format!("branch:{}", commit.as_str());
+    if branch != said {
+        if let Some(value) = proxy::header_value(&branch) {
+            headers.insert(DATA_VERSION, value);
+        }
+    }
+    response
 }
 
 /// How long to wait for a purge to be applied before answering anyway.
@@ -1338,7 +1381,7 @@ fn headers_from_meta(meta: &ResponseMeta) -> HeaderMap {
     }
     if let Some(data_version) = &meta.data_version {
         if let Some(value) = proxy::header_value(data_version) {
-            headers.insert("terminusdb-data-version", value);
+            headers.insert(DATA_VERSION, value);
         }
     }
     headers
@@ -1897,6 +1940,53 @@ mod tests {
 
     fn ns() -> Namespace {
         Namespace::new("admin", "mydb", "main")
+    }
+
+    fn answered_with(version: &str) -> Response {
+        let mut response = (StatusCode::OK, "{}").into_response();
+        response.headers_mut().insert(DATA_VERSION, HeaderValue::from_str(version).expect("a header value"));
+        response
+    }
+
+    fn version_of(response: &Response) -> Option<&str> {
+        response.headers().get(DATA_VERSION)?.to_str().ok()
+    }
+
+    /// A client that asked for a branch is told about a branch, whatever
+    /// resource we read to answer it.
+    ///
+    /// Every cacheable read is issued upstream pinned, and TerminusDB labels a
+    /// pinned read `commit:<id>`. Passing that on breaks the client's next
+    /// write: the data version is the token it names as its expected head, and
+    /// `branch:commit:<id>` is not a data version the server can parse. See
+    /// [`as_the_client_asked`].
+    #[test]
+    fn a_branch_read_is_answered_about_a_branch() {
+        let branch = Target::Branch { endpoint: "document".to_owned(), ns: ns() };
+        let answer = as_the_client_asked(&branch, answered_with("commit:abc123"));
+        assert_eq!(version_of(&answer), Some("branch:abc123"), "the commit stays; the resource it names is the one asked for");
+
+        // Already right — forwarded, or served from an upstream that was not
+        // pinned — and left alone.
+        let answer = as_the_client_asked(&branch, answered_with("branch:abc123"));
+        assert_eq!(version_of(&answer), Some("branch:abc123"));
+    }
+
+    /// A client that pinned its own read is told about that commit, which is
+    /// what it addressed and what the upstream would have said.
+    #[test]
+    fn a_pinned_read_keeps_its_commit() {
+        let pinned = Target::Pinned { endpoint: "document".to_owned(), ns: ns(), commit: CommitId::new("abc123") };
+        let answer = as_the_client_asked(&pinned, answered_with("commit:abc123"));
+        assert_eq!(version_of(&answer), Some("commit:abc123"));
+    }
+
+    /// A response that carries no data version gains none.
+    #[test]
+    fn nothing_is_invented_for_a_response_without_one() {
+        let branch = Target::Branch { endpoint: "document".to_owned(), ns: ns() };
+        let answer = as_the_client_asked(&branch, (StatusCode::OK, "{}").into_response());
+        assert_eq!(version_of(&answer), None);
     }
 
     #[test]
