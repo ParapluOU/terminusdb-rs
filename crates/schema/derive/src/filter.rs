@@ -99,7 +99,15 @@ fn generate_struct_filter(
             // mutual A<->B references) and would make the filter struct infinitely
             // sized. Box those to break the layout cycle. Box is serde-transparent.
             let ty_str = quote! { #fty }.to_string();
-            let is_link = ty_str.contains("TdbLazy") || ty_str.contains("EntityIDFor");
+            // `Ref<T>` and `Link<T>` are the names the guide tells people to
+            // write (CLAUDE.md, "Field types: VALUE vs LINK"); both are aliases
+            // of `TdbLazy<T>`, and a macro sees the name as written, not what it
+            // resolves to. Missing them meant a field declared the documented way
+            // was not boxed, and a self-referential one — `forked_from: Ref<Self>`
+            // — failed to compile with a layout cycle rather than working.
+            let is_link = ["TdbLazy", "EntityIDFor", "Ref <", "Ref<", "Link <", "Link<"]
+                .iter()
+                .any(|name| ty_str.contains(name));
             let filter_ty = if is_link {
                 quote! { Box<<#fty as terminusdb_schema::Filterable>::Filter> }
             } else {

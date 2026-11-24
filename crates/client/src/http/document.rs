@@ -1266,7 +1266,7 @@ impl super::client::TerminusDBHttpClient {
         ),
         err
     )]
-    pub(crate) async fn get_documents_with_headers(
+    pub async fn get_documents_with_headers(
         &self,
         ids: Vec<String>,
         spec: &BranchSpec,
