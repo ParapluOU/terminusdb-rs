@@ -12,6 +12,22 @@ cross-checked against `docs/terminusdb/releases/`. Procedure captured in the
 
 ### Server pin
 
+- [x] `v12.1.0-rc3-paraplu.3` — **the pin follows the fork's own `main`**
+      (2026-11-24). The embedded server was built from a tag cut beside our
+      development line; it is now cut from it, so what we run is our fork.
+      Beyond `.2` this brings the Proof-of-WOQL stack (per-layer proof state,
+      opt-in and off unless `TERMINUSDB_PROOF_STATE=on`), the commit diff log
+      over GraphQL, path-based GraphQL ordering and `/api/info` distribution
+      reporting — 43 files against `.2`, the commit path (`validate.pl`,
+      `store.rs`, `woql.json`) among them, which is why it was proved and not
+      assumed. Measured on `35fb3942`: plunit `db` + `open_descriptor` 30/30,
+      `cargo test -p terminusdb-bin` 16/16 (server-start and log-pipe
+      included), and Pubbin's `chunk_store_test` and `reactor_reads_test`
+      green against a server built from it. Known limitation: `src/rust/`
+      names `terminus-store` and `dory-pcs` by *branch*
+      (`ParapluOU/terminusdb-store`, `ParapluOU/dory`), pinned only by
+      `Cargo.lock` — `.2` depended on nothing moving. `.2` is kept intact, so
+      reverting the default is one line.
 - [x] `v12.1.0-rc3-paraplu.2` — `v12.1.0-rc3-paraplu.1` plus the fix for a
       background database load wedging the database it loaded
       (`generate_operation_id/1` threw on the erased output stream of a

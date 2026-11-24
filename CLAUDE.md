@@ -232,9 +232,13 @@ println!("Commit ID: {}", commit_id); // Just "abc123..." without the "branch:" 
 ## TerminusDB version
 
 This workspace targets **TerminusDB 12.1** and is v12-only (no v11 compatibility).
-The embedded server (`terminusdb-bin`) builds the `ParapluOU/terminusdb` fork
-rebased onto upstream `v12.1.0-rc3`, pinned in `crates/bin/build.rs` (default
-`TERMINUSDB_VERSION = "v12.1.0-rc3-paraplu.2"`). The pin is a **tag**, and a fix
+The embedded server (`terminusdb-bin`) builds the `ParapluOU/terminusdb` fork's
+own `main` line, based on upstream `v12.1.0-rc3`, pinned in `crates/bin/build.rs`
+(default `TERMINUSDB_VERSION = "v12.1.0-rc3-paraplu.3"`, an annotated tag cut
+from that `main`). We build our fork rather than a narrow tag beside it, and this
+workspace's `[patch.crates-io]` `terminus-store` pin already follows the same
+ParapluOU store revision that line locks. `v12.1.0-rc3-paraplu.2` — upstream rc3
+plus the background-load fix alone — is kept intact as the narrower fallback. The pin is a **tag**, and a fix
 of ours is only in the build once it is in a tag: `build.rs` updates its clone at
 `crates/bin/.deps/terminusdb-src` with `git fetch --depth=1 origin <tag>` and
 `git checkout FETCH_HEAD`, which discards whatever that directory had checked out

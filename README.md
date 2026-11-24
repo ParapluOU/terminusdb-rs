@@ -17,11 +17,11 @@ graph database built for the web age.
 | | |
 |---|---|
 | **TerminusDB server** | **12.1.0-rc3** |
-| Embedded server build (`terminusdb-bin`) | fork tag `v12.1.0-rc3-paraplu.2` ([ParapluOU/terminusdb](https://github.com/ParapluOU/terminusdb)) |
+| Embedded server build (`terminusdb-bin`) | fork tag `v12.1.0-rc3-paraplu.3` ([ParapluOU/terminusdb](https://github.com/ParapluOU/terminusdb)) |
 | Older servers | **not supported** — this workspace is v12-only, with no v11 compatibility |
 
-The tag is upstream `v12.1.0-rc3` plus the fork's patches, and a fix of ours
-counts only once it is in a tag: the clone `build.rs` keeps under
+The tag is cut from the fork's own `main` — we build our fork's line, not a
+point beside it — and a fix of ours counts only once it is in a tag: the clone `build.rs` keeps under
 `crates/bin/.deps/terminusdb-src` is reset to the pinned tag on every fetch, so a
 commit left on a branch in that directory is dropped without a message. Fixes go
 on [ParapluOU/terminusdb](https://github.com/ParapluOU/terminusdb)'s `main` and
@@ -34,7 +34,7 @@ than mocks. The pin lives in one place, `TERMINUSDB_VERSION` in
 
 ```bash
 # Track a different tag or branch of the server fork
-TERMINUSDB_VERSION=v12.1.0-rc3-paraplu.2 cargo build -p terminusdb-bin
+TERMINUSDB_VERSION=v12.1.0-rc3-paraplu.3 cargo build -p terminusdb-bin
 
 # Or build from a local server checkout (recommended for local development:
 # the saved state loads librust.so by absolute path, so the tree must persist)

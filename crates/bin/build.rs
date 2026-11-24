@@ -20,14 +20,59 @@ fn main() {
     #[cfg(not(target_os = "linux"))]
     let cache_complete = binary_path.exists();
 
+    // What this build would make its server out of.
+    //
+    // Pinned to a ParapluOU/terminusdb fork *tag* cut from that fork's `main`:
+    // upstream v12.1.0-rc3 plus our own line of work. We build our fork, not a
+    // point beside it — `main` is where our fixes land, and this repo's
+    // `[patch.crates-io]` store pin already follows the same ParapluOU store
+    // revision that line does.
+    //
+    // A tag and not a branch, because this build takes minutes of native
+    // compilation and the server it produces must be the same one twice.
+    // `v12.1.0-rc3-paraplu.2` is the narrower predecessor (upstream rc3 plus
+    // the background-load fix alone) and is kept intact, so reverting this
+    // default to it is a one-line change.
+    //
+    // Override with TERMINUSDB_VERSION to track a branch or try a bump.
+    let version = env::var("TERMINUSDB_VERSION")
+        .unwrap_or_else(|_| "v12.1.0-rc3-paraplu.3".to_string());
+
+    // The cached artifact is only reusable when it came from the same source.
+    // Without this the pin above is decorative on any tree that has already
+    // built once: `cargo:rerun-if-env-changed` catches a change to the
+    // *environment*, not a change to the default in this file, and the skip
+    // below returned on the mere presence of a binary. Bumping the pin then
+    // rebuilt nothing and embedded the old server without a word — the same
+    // silent substitution the tag is there to prevent. An unstamped artifact
+    // counts as unknown and is rebuilt, because keeping a server nobody can
+    // identify is the fault, not the cost of rebuilding it.
+    let source_stamp = match env::var("TERMINUSDB_SOURCE") {
+        Ok(path) => format!("source:{}", path),
+        Err(_) => format!("tag:{}", version),
+    };
+    let stamp_path = Path::new(&out_dir).join("terminusdb-source.stamp");
+    let stamp_matches = fs::read_to_string(&stamp_path)
+        .map(|recorded| recorded.trim() == source_stamp)
+        .unwrap_or(false);
+
     // Check if binary already exists and skip build if not forced
-    if cache_complete && !force_rebuild {
+    if cache_complete && stamp_matches && !force_rebuild {
         println!(
             "cargo:warning=TerminusDB binary already exists at {}",
             binary_path.display()
         );
         println!("cargo:warning=Skipping build. Set TERMINUSDB_FORCE_REBUILD=1 to force rebuild.");
         return;
+    }
+
+    if cache_complete && !stamp_matches && !force_rebuild {
+        println!(
+            "cargo:warning=Rebuilding TerminusDB: the cached server was not built from {} \
+             (stamp {})",
+            source_stamp,
+            stamp_path.display()
+        );
     }
 
     // Check for cross-compilation - if target differs from host, try to use pre-built binaries
@@ -150,24 +195,15 @@ fn main() {
             );
             dir
         } else {
-            // Fall back to cloning from GitHub.
+            // Fall back to cloning from GitHub, at the tag resolved above.
             //
-            // Pinned to a ParapluOU/terminusdb fork *tag*: upstream
-            // v12.1.0-rc3 plus the fork's own patches. A tag and not a branch,
-            // because this build takes minutes of native compilation and the
-            // server it produces must be the same one twice.
-            //
-            // Every fix of ours has to be in the tag. The clone below is
+            // Every fix of ours has to be in that tag. The clone below is
             // updated with `git fetch --depth=1 origin <version>` and
             // `git checkout FETCH_HEAD`, so whatever is checked out in the
             // existing `.deps` tree is discarded without a word. A fix that
             // lives only on a branch in that directory is silently dropped the
             // next time this runs, and the build then embeds a server without
             // it. Fixes go on the fork's `main` and into a new tag here.
-            //
-            // Override with TERMINUSDB_VERSION to track a branch or try a bump.
-            let version = env::var("TERMINUSDB_VERSION")
-                .unwrap_or_else(|_| "v12.1.0-rc3-paraplu.2".to_string());
             println!("cargo:warning=Building TerminusDB version: {}", version);
 
             // The clone is kept, and kept HERE rather than in the temp
@@ -290,6 +326,17 @@ fn main() {
              would fail with `librust: cannot open shared object file`. The build tree must \
              survive the build and must not move.",
             dylib.display()
+        );
+    }
+
+    // Only now, with a server in OUT_DIR, is it true that this artifact came
+    // from `source_stamp`. Written last so an interrupted build leaves the
+    // artifact unstamped and therefore rebuilt, never misattributed.
+    if let Err(e) = fs::write(&stamp_path, &source_stamp) {
+        panic!(
+            "Failed to record the TerminusDB source stamp at {}: {}",
+            stamp_path.display(),
+            e
         );
     }
 

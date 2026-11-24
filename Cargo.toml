@@ -111,8 +111,8 @@ lto = true
 codegen-units = 1
 
 [patch.crates-io]
-# Pins matched to terminusdb-community @ v12.1.0-rc3-paraplu.2 (fork rebased on
-# upstream v12.1.0-rc3). Keep in lockstep with crates/gql's terminusdb-community
+# Pins matched to terminusdb-community @ v12.1.0-rc3-paraplu.3 (the fork's own
+# main line, based on upstream v12.1.0-rc3). Keep in lockstep with crates/gql's terminusdb-community
 # rev.
 # One store lineage, reached by both routes. Our fork (version 0.23.1 on
 # purpose, so this patch is semver-accepted) is a superset of upstream
