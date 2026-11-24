@@ -413,14 +413,35 @@ pub struct TerminusDBServer {
 /// How many of the server's last log lines are kept for [`TerminusDBServer::recent_log`].
 const LOG_LINES_KEPT: usize = 500;
 
-/// The tail of a running server's standard error.
+/// The tail of a running server's standard error, and whether that pipe has
+/// closed.
+///
+/// The closing is the liveness signal. A server that has exited is still a
+/// process — a zombie, until somebody reaps it — so `kill(pid, 0)` says it is
+/// alive and is no use; `try_wait` needs `&mut Child`, which a shared server
+/// cannot give. But the read end of its standard error reaches EOF exactly when
+/// the last writer closes it, which is when the process is gone, and this
+/// thread is already sitting on that read end for reasons of its own. So the
+/// answer is a by-product of work already being done rather than a poll.
 #[derive(Clone, Default)]
-struct ServerLog(std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>);
+struct ServerLog {
+    lines: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
+    /// Set when the standard-error pipe reaches EOF: the server has exited.
+    closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
 
 impl ServerLog {
+    fn closed(&self) {
+        self.closed.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    fn has_closed(&self) -> bool {
+        self.closed.load(std::sync::atomic::Ordering::Acquire)
+    }
+
     fn push(&self, line: String) {
         // A poisoned lock only means a reader panicked; the lines are still good.
-        let mut lines = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut lines = self.lines.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if lines.len() == LOG_LINES_KEPT {
             lines.pop_front();
         }
@@ -428,7 +449,7 @@ impl ServerLog {
     }
 
     fn lines(&self) -> Vec<String> {
-        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).iter().cloned().collect()
+        self.lines.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).iter().cloned().collect()
     }
 }
 
@@ -476,7 +497,8 @@ fn drain_stderr(child: &mut Child, forward: bool) -> anyhow::Result<ServerLog> {
             loop {
                 line.clear();
                 match reader.read_until(b'\n', &mut line) {
-                    // The server has exited and closed its end.
+                    // The server has exited and closed its end. Which is also
+                    // how anybody asking learns it is gone: see `ServerLog`.
                     Ok(0) => break,
                     Ok(_) => {
                         let text = String::from_utf8_lossy(&line);
@@ -498,6 +520,12 @@ fn drain_stderr(child: &mut Child, forward: bool) -> anyhow::Result<ServerLog> {
                     }
                 }
             }
+            // However the loop ended, nothing will be read from this server
+            // again, so nothing more can be said about it: the honest answer to
+            // "is it running" from here on is no. A read error is rare and
+            // means the pipe is unusable, which for a database we cannot see is
+            // the same thing as gone.
+            kept.closed();
         })?;
     Ok(log)
 }
@@ -521,6 +549,24 @@ impl TerminusDBServer {
     /// it had to say about errors.
     pub fn recent_log(&self) -> Vec<String> {
         self.log.lines()
+    }
+
+    /// Whether this server's process has exited.
+    ///
+    /// `true` means it is gone and nothing will bring it back: the binary is a
+    /// SWI-Prolog saved state and this struct holds the only handle to the
+    /// child. A server whose database has exited can do nothing, and the point
+    /// of asking is to be able to say so instead of looking healthy.
+    ///
+    /// Answered from the standard-error pipe having reached EOF, which happens
+    /// when the last writer closes it — and the only writer is the server. It
+    /// needs no `&mut`, reaps nothing, and costs an atomic load, so it is fit
+    /// for a health route. It is not a liveness check in the other direction:
+    /// `false` means "has not been seen to exit", so a server wedged on a full
+    /// pipe or hung in a request still reads as running, which is what the
+    /// request timeout is for.
+    pub fn has_exited(&self) -> bool {
+        self.log.has_closed()
     }
 
     /// Start a new test server with default test settings.
