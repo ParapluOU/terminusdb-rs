@@ -12,6 +12,14 @@ cross-checked against `docs/terminusdb/releases/`. Procedure captured in the
 
 ### Server pin
 
+- [x] `v12.1.0-rc3-paraplu.2` — `v12.1.0-rc3-paraplu.1` plus the fix for a
+      background database load wedging the database it loaded
+      (`generate_operation_id/1` threw on the erased output stream of a
+      `detached(true)` loader thread, so `db_unservable_loading/3` was never
+      retracted and a healthy database answered 503 for the life of the
+      process). On the fork's `main` and on its `v12.1.0-rc3-paraplu` release
+      line; `TERMINUSDB_VERSION` in `crates/bin/build.rs` names the tag. The
+      crate pins are unchanged — the fix is Prolog only.
 - [x] Rebase the 4 fork patches onto `v12.1.0-rc3`, tag `v12.1.0-rc3-paraplu.1`,
       bump `TERMINUSDB_VERSION` in `crates/bin/build.rs`, `crates/gql`'s
       `terminusdb-community` rev, and the `[patch.crates-io]` pins in the root

@@ -151,11 +151,23 @@ fn main() {
             dir
         } else {
             // Fall back to cloning from GitHub.
-            // Pinned to the ParapluOU/terminusdb fork tag rebased onto upstream
-            // TerminusDB v12.1.0-rc3 (the newest upstream release candidate).
-            // Override with TERMINUSDB_VERSION to track a moving branch or bump.
+            //
+            // Pinned to a ParapluOU/terminusdb fork *tag*: upstream
+            // v12.1.0-rc3 plus the fork's own patches. A tag and not a branch,
+            // because this build takes minutes of native compilation and the
+            // server it produces must be the same one twice.
+            //
+            // Every fix of ours has to be in the tag. The clone below is
+            // updated with `git fetch --depth=1 origin <version>` and
+            // `git checkout FETCH_HEAD`, so whatever is checked out in the
+            // existing `.deps` tree is discarded without a word. A fix that
+            // lives only on a branch in that directory is silently dropped the
+            // next time this runs, and the build then embeds a server without
+            // it. Fixes go on the fork's `main` and into a new tag here.
+            //
+            // Override with TERMINUSDB_VERSION to track a branch or try a bump.
             let version = env::var("TERMINUSDB_VERSION")
-                .unwrap_or_else(|_| "v12.1.0-rc3-paraplu.1".to_string());
+                .unwrap_or_else(|_| "v12.1.0-rc3-paraplu.2".to_string());
             println!("cargo:warning=Building TerminusDB version: {}", version);
 
             // The clone is kept, and kept HERE rather than in the temp

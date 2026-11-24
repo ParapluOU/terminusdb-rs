@@ -234,7 +234,13 @@ println!("Commit ID: {}", commit_id); // Just "abc123..." without the "branch:" 
 This workspace targets **TerminusDB 12.1** and is v12-only (no v11 compatibility).
 The embedded server (`terminusdb-bin`) builds the `ParapluOU/terminusdb` fork
 rebased onto upstream `v12.1.0-rc3`, pinned in `crates/bin/build.rs` (default
-`TERMINUSDB_VERSION = "v12.1.0-rc3-paraplu.1"`). See
+`TERMINUSDB_VERSION = "v12.1.0-rc3-paraplu.2"`). The pin is a **tag**, and a fix
+of ours is only in the build once it is in a tag: `build.rs` updates its clone at
+`crates/bin/.deps/terminusdb-src` with `git fetch --depth=1 origin <tag>` and
+`git checkout FETCH_HEAD`, which discards whatever that directory had checked out
+without saying so. So a fix goes on the fork's `main` and into a new tag
+(`…-paraplu.<n+1>`), and this default is bumped to it — never left on a branch in
+the build directory. See
 `docs/terminusdb12-compat-plan.md` for the upgrade milestones and status, and the
 refreshed docs mirror in `docs/terminusdb/`.
 
