@@ -1124,20 +1124,23 @@ impl<'a> XmlToInstanceParser<'a> {
                         // whose types map to XSD primitives rather than TDB classes.
                         // Capture the text content as a primitive property on the
                         // TaggedUnion child instance.
+                        //
+                        // An **empty** one is stored too, as the empty string.
+                        // It used to be skipped, which lost the element: a
+                        // `<title></title>` went in and did not come back, so a
+                        // document came out of the graph with fewer elements
+                        // than went in. Nothing downstream can put it back —
+                        // the schema says an element may be there, not that it
+                        // was — and in Pubbin the loss is fatal rather than
+                        // cosmetic, because a chunk's element identities are
+                        // counted against its elements and a chunk whose
+                        // content and ids disagree cannot be opened at all.
                         let text = child_elem.text.as_deref().unwrap_or("").trim();
-                        if !text.is_empty() {
-                            children.push(self.make_primitive_child(
-                                child_union_schema,
-                                child_elem.local_name(),
-                                text,
-                            ));
-                        } else {
-                            tracing::warn!(
-                                "Skipping empty simple-type child element <{}> in <{}>",
-                                child_elem.local_name(),
-                                elem.local_name(),
-                            );
-                        }
+                        children.push(self.make_primitive_child(
+                            child_union_schema,
+                            child_elem.local_name(),
+                            text,
+                        ));
                     }
                 }
                 if let Some(piece) = tail_piece {
