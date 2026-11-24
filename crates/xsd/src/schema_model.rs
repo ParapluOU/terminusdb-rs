@@ -265,6 +265,8 @@ impl XsdSchema {
             }
         }
 
+        Self::collect_anonymous_text_types(schema, &mut complex_types);
+
         // Process imported schemas to extract their elements and types
         // This ensures elements from external namespaces (MathML, XInclude, TBX, etc.) are available
         //
@@ -307,6 +309,8 @@ impl XsdSchema {
                         }
                     }
                 }
+
+                Self::collect_anonymous_text_types(imported_schema, &mut complex_types);
 
                 // Extract LOCAL elements from groups
                 // Some schemas (like MathML) define elements inside groups, not as global elements
@@ -402,6 +406,88 @@ impl XsdSchema {
     ///
     /// This function walks through all groups in a schema and extracts local element
     /// declarations as if they were global elements.
+    /// Collect the anonymous types of **local** elements that hold text and carry
+    /// attributes, so that each has a class to be stored as.
+    ///
+    /// [`Self::extract_type_from_element`] stops flattening such a type to its base
+    /// and names it after its element; this is what makes that name resolve. The
+    /// anonymous types of *global* elements are collected above, and those inside
+    /// named groups by [`Self::extract_local_elements_from_groups`]; an element
+    /// declared in the content model of a complex type — `<xs:element name="step">`
+    /// inside a `<xs:sequence>` — was in neither, so its type existed nowhere and a
+    /// property typed by it would name a class the schema does not have.
+    ///
+    /// Only types that hold text *and* carry attributes are collected: those are the
+    /// ones that had nowhere to keep the attributes. Everything else is untouched, so
+    /// no schema that stored correctly before stores differently now.
+    ///
+    /// Known limit: the class is named after the element, as it is for a global one,
+    /// so two different anonymous types on elements of the same name would want one
+    /// class. The first collected wins (the generator deduplicates by name). Naming
+    /// them apart would put a new kind of name into every generated schema, which is
+    /// a decision on its own.
+    fn collect_anonymous_text_types(schema: &RustXsdSchema, complex_types: &mut Vec<XsdComplexType>) {
+        use xmlschema::validators::complex_types::ComplexContent;
+        use xmlschema::validators::groups::GroupParticle;
+
+        fn walk(
+            particles: &[GroupParticle],
+            schema: &RustXsdSchema,
+            found: &mut Vec<XsdComplexType>,
+            depth: usize,
+        ) {
+            // A content model can reach itself through a group; the depth is the
+            // guard, as it is elsewhere in this file.
+            if depth > 24 {
+                return;
+            }
+            for particle in particles {
+                match particle {
+                    GroupParticle::Element(ep) => {
+                        let Some(elem) = &ep.element_decl else { continue };
+                        let xmlschema::validators::ElementType::Complex(ct) = &elem.element_type else { continue };
+                        if ct.name.is_some() {
+                            continue;
+                        }
+                        if !(ct.has_simple_content() && ct.attributes.iter_attributes().next().is_some()) {
+                            continue;
+                        }
+                        let elem_name = &ep.name.local_name;
+                        let mut complex = XsdSchema::extract_complex_type(elem_name, ct, schema);
+                        complex.is_anonymous = true;
+                        complex.element_name = Some(elem_name.to_string());
+                        found.push(complex);
+                    }
+                    GroupParticle::Group(nested) => walk(&nested.particles, schema, found, depth + 1),
+                    // A wildcard declares no element, so it holds no such type.
+                    GroupParticle::Any(_) => {}
+                }
+            }
+        }
+
+        let mut found = Vec::new();
+        let models = schema
+            .types()
+            .filter_map(|(_, global)| match global {
+                xmlschema::validators::GlobalType::Complex(ct) => Some(ct.clone()),
+                xmlschema::validators::GlobalType::Simple(_) => None,
+            })
+            .chain(schema.elements().filter_map(|(_, elem)| match &elem.element_type {
+                xmlschema::validators::ElementType::Complex(ct) => Some(ct.clone()),
+                _ => None,
+            }));
+        for ct in models {
+            if let ComplexContent::Group(group) = &ct.content {
+                walk(&group.particles, schema, &mut found, 0);
+            }
+        }
+        for complex in found {
+            if !complex_types.iter().any(|known| known.name == complex.name) {
+                complex_types.push(complex);
+            }
+        }
+    }
+
     fn extract_local_elements_from_groups(
         schema: &RustXsdSchema,
         root_elements: &mut Vec<XsdElement>,
@@ -734,6 +820,22 @@ impl XsdSchema {
                 // Try named complex type first
                 if let Some(name) = &ct.name {
                     return name.to_string();
+                }
+                // An anonymous type that **holds text and carries attributes** is a
+                // type of its own and must not be flattened to its base.
+                //
+                // The rule, in one sentence: an element is stored as a class exactly
+                // when its type declares attributes; otherwise it is stored as its
+                // text alone. A *named* simpleContent type with attributes has always
+                // been stored as a class (`_text` for the text, a property per
+                // attribute) — this makes an anonymous one agree with it. Flattening
+                // returned the base simple type, so the element became a bare string
+                // in its parent's children and `<step minutes="10">Mix.</step>` came
+                // back as `<step>Mix.</step>`: silent loss of the attribute on every
+                // save. An anonymous simpleContent type with no attributes keeps being
+                // stored as its text, because there is nothing else in it to lose.
+                if ct.has_simple_content() && ct.attributes.iter_attributes().next().is_some() {
+                    return elem.name.local_name.clone();
                 }
                 // For anonymous types, check if they extend a named base type
                 // This is common in DITA where <xs:element name="title"> has an inline
