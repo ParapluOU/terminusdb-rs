@@ -10,6 +10,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use terminusdb_schema::{Context, Key, Property, Schema, SetCardinality, TypeFamily};
 
+/// MathML's namespace. The generator knows MathML's simple types by name
+/// ([`XsdToSchemaGenerator::mathml_simple_type`]) because MathML is embedded in
+/// JATS, BITS and DITA; it must know them **only** in this namespace, or it
+/// renames everyone else's `number`.
+const MATHML_NAMESPACE: &str = "http://www.w3.org/1998/Math/MathML";
+
 /// Entry point candidate with scoring information.
 #[derive(Debug, Clone)]
 pub struct EntryPointCandidate {
@@ -1540,6 +1546,38 @@ impl XsdToSchemaGenerator {
         })
     }
 
+    /// One of MathML's own simple types, mapped to the closest XSD primitive —
+    /// asked **only** of a type in MathML's namespace.
+    ///
+    /// The table is here because MathML is embedded in JATS, BITS and DITA, and
+    /// those schemas are not ours to change. It was matched against the local
+    /// name alone, so a `number`, `length`, `color` or `character` in *any*
+    /// namespace got MathML's mapping; `mathml_type_names_tests` holds that
+    /// fixed in both directions.
+    ///
+    /// Every one of these is a plain restriction of an XSD built-in
+    /// (`mathml3-presentation.xsd`), so `simple_type_bases` would resolve them
+    /// correctly on its own wherever the MathML schema is actually in scope.
+    /// The table is kept, and scoped, because it also answers where it is not —
+    /// a schema that refers to MathML without importing it.
+    ///
+    /// `number` is `xsd:decimal` and not `xsd:integer`: MathML declares it
+    /// `<xs:restriction base="xs:decimal"/>`, and `@scriptsizemultiplier`
+    /// defaults to 0.71, so an integer lost it. That was wrong for MathML
+    /// itself, not only for everyone who happened to share the name.
+    fn mathml_simple_type(local_name: &str) -> Option<&'static str> {
+        Some(match local_name {
+            "character" | "Character" | "color" | "Color" | "length" | "Length"
+            | "mpadded-length" | "MpaddedLength" | "group-alignment-list" | "GroupAlignmentList"
+            | "group-alignment-list-list" | "GroupAlignmentListList" => "xsd:string",
+            "number" | "Number" => "xsd:decimal",
+            "positive-integer" | "PositiveInteger" | "unsigned-integer" | "UnsignedInteger" => {
+                "xsd:integer"
+            }
+            _ => return None,
+        })
+    }
+
     fn map_xsd_type_to_tdb_class(&self, xsd_type: &str) -> Result<String> {
         // Check for unresolved elements - these are errors, not xs:anyType
         if xsd_type.starts_with("UNRESOLVED:") {
@@ -1550,12 +1588,21 @@ impl XsdToSchemaGenerator {
             )));
         }
 
-        // Extract local name from Clark notation if present
-        let type_name = if xsd_type.contains('}') {
-            xsd_type.split('}').nth(1).unwrap_or(xsd_type)
-        } else {
-            xsd_type
+        // Extract the namespace *and* the local name from Clark notation. The
+        // namespace used to be split off here and dropped, which is what made
+        // the MathML table below namespace-blind: see
+        // [`Self::mathml_simple_type`].
+        let (namespace, type_name) = match xsd_type.split_once('}') {
+            Some((namespace, local)) => (Some(namespace.trim_start_matches('{')), local),
+            None => (None, xsd_type),
         };
+
+        // MathML's own simple types, and only in MathML's own namespace.
+        if namespace == Some(MATHML_NAMESPACE) {
+            if let Some(mapped) = Self::mathml_simple_type(type_name) {
+                return Ok(mapped.to_string());
+            }
+        }
 
         // Map XSD built-in types to TerminusDB types
         let mapped = match type_name {
@@ -1597,21 +1644,6 @@ impl XsdToSchemaGenerator {
             "nonPositiveInteger" | "xs:nonPositiveInteger" | "xsd:nonPositiveInteger" => {
                 "xsd:integer"
             }
-            // MathML simple types — map to closest XSD primitive
-            "character"
-            | "Character"
-            | "color"
-            | "Color"
-            | "length"
-            | "Length"
-            | "mpadded-length"
-            | "MpaddedLength"
-            | "group-alignment-list"
-            | "GroupAlignmentList"
-            | "group-alignment-list-list"
-            | "GroupAlignmentListList" => "xsd:string",
-            "number" | "Number" | "positive-integer" | "PositiveInteger" | "unsigned-integer"
-            | "UnsignedInteger" => "xsd:integer",
             // xs:anyType allows arbitrary content - map to sys:JSON (unconstrained JSON subdocument)
             "anyType" | "xs:anyType" | "xsd:anyType" => "sys:JSON",
             // Check if this is a restricted simple type with a base type.
