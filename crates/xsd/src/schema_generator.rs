@@ -1227,15 +1227,23 @@ impl XsdToSchemaGenerator {
         // be subdocuments to allow embedding instances of derived types (Title).
         let subdocument = !root_element_types.contains(&class_id);
 
-        // Key strategy:
-        // - Documents (non-subdocuments) use ValueHash for content-based addressing
-        // - Subdocuments should NOT use ValueHash as it causes TerminusDB to fail
-        //   on instance insertion (returns "Unexpected failure in request handler")
-        let key = if subdocument {
-            Key::Random
-        } else {
-            Key::ValueHash
-        };
+        // Key strategy: `Random` throughout, which here means "the id is the
+        // caller's to supply".
+        //
+        // A document root used to be `ValueHash` — content-based addressing — and
+        // that made a chunk root's entity id two things it must not be. It
+        // changed with every edit, so no revision of a chunk shared the root
+        // identity of the last; and it could not be *set*, because the id would
+        // be derived from content that was about to carry it. A chunk root is
+        // exactly the element that needs a settable, stable id: it carries the
+        // `xs:ID` a link names, and that value and the stored entity's id are
+        // meant to be one thing. `Random` only decides who mints when nobody
+        // says — supply `@id` and TerminusDB keeps it.
+        //
+        // A subdocument must not be `ValueHash` for a different reason: it makes
+        // TerminusDB fail instance insertion outright ("Unexpected failure in
+        // request handler").
+        let key = Key::Random;
 
         // Extract inheritance from XSD base_type (for extension/restriction)
         // IMPORTANT: When a complex type has simpleContent extending a simple type,
