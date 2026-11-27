@@ -15,7 +15,9 @@ mod tests {
     use terminusdb_bin::TerminusDBServer;
     use terminusdb_client::*;
     use terminusdb_schema::XSDAnySimpleType;
-    use terminusdb_woql2::collection::{ListToSet, SetDifference, SetIntersection, SetUnion, Slice};
+    use terminusdb_woql2::collection::{
+        ListToSet, SetDifference, SetIntersection, SetUnion, Slice,
+    };
     use terminusdb_woql2::compare::{Gte, Lte};
     use terminusdb_woql2::misc::InRange;
     use terminusdb_woql2::prelude::{DataValue, Query};
@@ -71,7 +73,10 @@ mod tests {
                     }),
                 )
                 .await?;
-                println!("SetIntersection -> {:?}", b.first().and_then(|m| m.get("R")));
+                println!(
+                    "SetIntersection -> {:?}",
+                    b.first().and_then(|m| m.get("R"))
+                );
 
                 // SetDifference([1,2,3], [2]) -> {1,3}
                 let b = run(

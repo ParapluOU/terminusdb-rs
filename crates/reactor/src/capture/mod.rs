@@ -1011,7 +1011,12 @@ impl Supervisor {
     /// Failure is logged and tolerated: an empty or stale index makes analyzers
     /// emit coarse terms, which costs hit rate rather than correctness.
     pub async fn refresh_schema(&self, ns: &Namespace) {
-        match self.clients.for_ns(ns).get_schema_documents(&ns.to_branch_spec()).await {
+        match self
+            .clients
+            .for_ns(ns)
+            .get_schema_documents(&ns.to_branch_spec())
+            .await
+        {
             Ok(docs) => match crate::schema_index::SchemaIndex::from_schema_documents(&docs) {
                 Ok(index) => {
                     let classes = index.classes().count();
@@ -1089,7 +1094,12 @@ impl Supervisor {
                 CaptureHint::Commit { ns, commit } => (ns, CommitEvent::new(commit)),
                 CaptureHint::Resync { ns } => {
                     // We do not know the new head; ask the node.
-                    match self.clients.for_ns(&ns).get_latest_commit_id(&ns.to_branch_spec()).await {
+                    match self
+                        .clients
+                        .for_ns(&ns)
+                        .get_latest_commit_id(&ns.to_branch_spec())
+                        .await
+                    {
                         Ok(head) => (ns, CommitEvent::new(head)),
                         Err(err) => {
                             tracing::warn!(%ns, error = %err, "resync could not read the head");
@@ -1116,7 +1126,12 @@ impl Supervisor {
         // cannot be served from cache at all — there is no position to pin a
         // fill at — so keep trying.
         loop {
-            match self.clients.for_ns(&ns).get_latest_commit_id(&ns.to_branch_spec()).await {
+            match self
+                .clients
+                .for_ns(&ns)
+                .get_latest_commit_id(&ns.to_branch_spec())
+                .await
+            {
                 Ok(head) => match applier.apply(&ns, &CommitEvent::new(head)).await {
                     Ok(outcome) => {
                         tracing::info!(%ns, ?outcome, "capture started");

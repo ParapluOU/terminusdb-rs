@@ -407,8 +407,14 @@ struct Ledger {
 fn documents_inside_an_inline_document_without_an_id_are_lifted_out() {
     let amount = Amount { units: 14 };
     let ledger = Ledger {
-        first: Change { all: false, amount: amount.clone() },
-        second: Change { all: true, amount: amount.clone() },
+        first: Change {
+            all: false,
+            amount: amount.clone(),
+        },
+        second: Change {
+            all: true,
+            amount: amount.clone(),
+        },
         direct: amount,
     };
     let mut instance = ledger.to_instance(None);
@@ -420,7 +426,10 @@ fn documents_inside_an_inline_document_without_an_id_are_lifted_out() {
             _ => {}
         }
         for (_, prop) in instance.properties.iter_mut() {
-            if let terminusdb_schema::InstanceProperty::Relation(terminusdb_schema::RelationValue::One(inner)) = prop {
+            if let terminusdb_schema::InstanceProperty::Relation(
+                terminusdb_schema::RelationValue::One(inner),
+            ) = prop
+            {
                 address(inner);
             }
         }
@@ -440,7 +449,9 @@ fn documents_inside_an_inline_document_without_an_id_are_lifted_out() {
                     inline_documents(child, depth + 1, found);
                 }
             }
-            serde_json::Value::Array(items) => items.iter().for_each(|item| inline_documents(item, depth, found)),
+            serde_json::Value::Array(items) => items
+                .iter()
+                .for_each(|item| inline_documents(item, depth, found)),
             _ => {}
         }
     }

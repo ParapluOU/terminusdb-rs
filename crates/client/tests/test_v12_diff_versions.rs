@@ -27,7 +27,10 @@ mod tests {
                 // Commit 1: val = "one".
                 let r1 = client
                     .insert_instance(
-                        &Thing { id: EntityIDFor::new("x").unwrap(), val: "one".to_string() },
+                        &Thing {
+                            id: EntityIDFor::new("x").unwrap(),
+                            val: "one".to_string(),
+                        },
                         args.clone(),
                     )
                     .await?;
@@ -36,7 +39,10 @@ mod tests {
                 // Commit 2: val = "two" (update).
                 let r2 = client
                     .insert_instance(
-                        &Thing { id: EntityIDFor::new("x").unwrap(), val: "two".to_string() },
+                        &Thing {
+                            id: EntityIDFor::new("x").unwrap(),
+                            val: "two".to_string(),
+                        },
                         args.clone(),
                     )
                     .await?;

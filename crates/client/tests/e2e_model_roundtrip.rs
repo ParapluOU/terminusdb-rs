@@ -65,7 +65,9 @@ where
             client.insert_instance(&original, args).await?;
 
             let mut de = DefaultTDBDeserializer;
-            let retrieved: M = client.get_instance_unfolded::<M>(&id, &spec, &mut de).await?;
+            let retrieved: M = client
+                .get_instance_unfolded::<M>(&id, &spec, &mut de)
+                .await?;
 
             assert_eq!(
                 retrieved,
@@ -244,8 +246,9 @@ async fn roundtrip_sys_json() -> Result<()> {
             // sys:JSON is stored content-addressed; it must be unfolded to inline
             // the value rather than returning a blob IRI.
             let mut de = DefaultTDBDeserializer;
-            let retrieved: JsonField =
-                client.get_instance_unfolded::<JsonField>("j1", &spec, &mut de).await?;
+            let retrieved: JsonField = client
+                .get_instance_unfolded::<JsonField>("j1", &spec, &mut de)
+                .await?;
             assert_eq!(retrieved, original);
             Ok(())
         })
@@ -519,8 +522,9 @@ async fn roundtrip_shape(prefix: &str, id: &str, shape: Shape) -> Result<()> {
             let args = DocumentInsertArgs::from(spec.clone());
             client.insert_instance(&original, args).await?;
             let mut de = DefaultTDBDeserializer;
-            let retrieved: Drawing =
-                client.get_instance_unfolded::<Drawing>(&id, &spec, &mut de).await?;
+            let retrieved: Drawing = client
+                .get_instance_unfolded::<Drawing>(&id, &spec, &mut de)
+                .await?;
             assert_eq!(retrieved, original);
             Ok(())
         })
@@ -650,19 +654,22 @@ struct Gadget {
 async fn roundtrip_inheritance() -> Result<()> {
     let server = TerminusDBServer::test_instance().await?;
     server
-        .with_db_schema::<(NamedEntity, Gadget), _, _, _>("rt_inheritance", |client, spec| async move {
-            let gadget = Gadget {
-                id: EntityIDFor::new("g1").unwrap(),
-                label: "Toaster".into(),
-                voltage: 230,
-            };
-            let args = DocumentInsertArgs::from(spec.clone());
-            client.insert_instance(&gadget, args).await?;
-            let mut de = DefaultTDBDeserializer;
-            let retrieved: Gadget = client.get_instance::<Gadget>("g1", &spec, &mut de).await?;
-            assert_eq!(retrieved, gadget);
-            Ok(())
-        })
+        .with_db_schema::<(NamedEntity, Gadget), _, _, _>(
+            "rt_inheritance",
+            |client, spec| async move {
+                let gadget = Gadget {
+                    id: EntityIDFor::new("g1").unwrap(),
+                    label: "Toaster".into(),
+                    voltage: 230,
+                };
+                let args = DocumentInsertArgs::from(spec.clone());
+                client.insert_instance(&gadget, args).await?;
+                let mut de = DefaultTDBDeserializer;
+                let retrieved: Gadget = client.get_instance::<Gadget>("g1", &spec, &mut de).await?;
+                assert_eq!(retrieved, gadget);
+                Ok(())
+            },
+        )
         .await
 }
 
@@ -709,8 +716,9 @@ async fn roundtrip_composite() -> Result<()> {
             client.insert_instance(&original, args).await?;
 
             let mut de = DefaultTDBDeserializer;
-            let retrieved: Composite =
-                client.get_instance_unfolded::<Composite>("cx1", &spec, &mut de).await?;
+            let retrieved: Composite = client
+                .get_instance_unfolded::<Composite>("cx1", &spec, &mut de)
+                .await?;
             assert_eq!(retrieved.title, original.title);
             assert_eq!(retrieved.tags, original.tags);
             assert_eq!(retrieved.count, original.count);

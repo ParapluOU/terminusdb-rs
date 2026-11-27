@@ -255,7 +255,10 @@ impl TerminusDBMcpHandler {
         Ok(response)
     }
 
-    pub(crate) async fn handle_delete_classes(&self, request: DeleteClassesTool) -> Result<serde_json::Value> {
+    pub(crate) async fn handle_delete_classes(
+        &self,
+        request: DeleteClassesTool,
+    ) -> Result<serde_json::Value> {
         info!("Deleting classes: {:?}", request.class_names);
 
         let config = self.get_connection_config(request.connection).await;

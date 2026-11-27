@@ -512,7 +512,10 @@ mod tests {
                 println!("\nTest 2: Type query + select subject");
                 let query = using!(
                     &commit_collection,
-                    select!([Subject], triple!(var!(Subject), "rdf:type", "@schema:Person"))
+                    select!(
+                        [Subject],
+                        triple!(var!(Subject), "rdf:type", "@schema:Person")
+                    )
                 );
 
                 let json_query = query.to_instance(None).to_json();
@@ -802,10 +805,7 @@ mod tests {
                 // Test 3: Query available collections/graphs
                 println!("\n=== Test 3: Query available collections/graphs ===");
 
-                let query = select!(
-                    [Graph, Type],
-                    triple!(var!(Graph), "rdf:type", var!(Type))
-                );
+                let query = select!([Graph, Type], triple!(var!(Graph), "rdf:type", var!(Type)));
 
                 let json_query = query.to_instance(None).to_json();
                 let result: WOQLResult<HashMap<String, serde_json::Value>> = client

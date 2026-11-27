@@ -79,7 +79,9 @@ async fn subscription_delivers_a_document_insert() -> Result<()> {
             await_connected(&mut events).await?;
 
             let args = DocumentInsertArgs::from(spec.clone());
-            client.insert_instance(&person("alice", "Alice")?, args).await?;
+            client
+                .insert_instance(&person("alice", "Alice")?, args)
+                .await?;
 
             let event = next_event(&mut events).await?;
             println!("Person_added -> {event:?}");

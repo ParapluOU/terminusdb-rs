@@ -330,7 +330,10 @@ impl TerminusDBMcpHandler {
         Ok((Box::leak(db_path.into_boxed_str()), remote_name))
     }
 
-    pub(crate) async fn handle_add_remote(&self, request: AddRemoteTool) -> Result<serde_json::Value> {
+    pub(crate) async fn handle_add_remote(
+        &self,
+        request: AddRemoteTool,
+    ) -> Result<serde_json::Value> {
         info!(
             "Adding remote at path: {} with URL: {}",
             request.path, request.remote_url
@@ -353,7 +356,10 @@ impl TerminusDBMcpHandler {
         }))
     }
 
-    pub(crate) async fn handle_get_remote(&self, request: GetRemoteTool) -> Result<serde_json::Value> {
+    pub(crate) async fn handle_get_remote(
+        &self,
+        request: GetRemoteTool,
+    ) -> Result<serde_json::Value> {
         info!("Getting remote information for path: {}", request.path);
 
         let config = self.get_connection_config(request.connection).await;
@@ -370,7 +376,10 @@ impl TerminusDBMcpHandler {
         }))
     }
 
-    pub(crate) async fn handle_update_remote(&self, request: UpdateRemoteTool) -> Result<serde_json::Value> {
+    pub(crate) async fn handle_update_remote(
+        &self,
+        request: UpdateRemoteTool,
+    ) -> Result<serde_json::Value> {
         info!(
             "Updating remote at path: {} with new URL: {}",
             request.path, request.remote_url
@@ -393,7 +402,10 @@ impl TerminusDBMcpHandler {
         }))
     }
 
-    pub(crate) async fn handle_delete_remote(&self, request: DeleteRemoteTool) -> Result<serde_json::Value> {
+    pub(crate) async fn handle_delete_remote(
+        &self,
+        request: DeleteRemoteTool,
+    ) -> Result<serde_json::Value> {
         info!("Deleting remote at path: {}", request.path);
 
         let config = self.get_connection_config(request.connection).await;

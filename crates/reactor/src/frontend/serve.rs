@@ -616,10 +616,19 @@ pub async fn handle(State(state): State<Arc<AppState>>, request: Request<Body>) 
 /// client addressed and what the upstream would have told it. A bypassed
 /// request is not touched at all — upstream saw the client's own path.
 fn as_the_client_asked(target: &Target, mut response: Response) -> Response {
-    let Target::Branch { .. } = target else { return response };
+    let Target::Branch { .. } = target else {
+        return response;
+    };
     let headers = response.headers_mut();
-    let Some(said) = headers.get(DATA_VERSION).and_then(|value| value.to_str().ok()) else { return response };
-    let Some(commit) = proxy::parse_data_version(said) else { return response };
+    let Some(said) = headers
+        .get(DATA_VERSION)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return response;
+    };
+    let Some(commit) = proxy::parse_data_version(said) else {
+        return response;
+    };
     let branch = format!("branch:{}", commit.as_str());
     if branch != said {
         if let Some(value) = proxy::header_value(&branch) {
@@ -1944,7 +1953,10 @@ mod tests {
 
     fn answered_with(version: &str) -> Response {
         let mut response = (StatusCode::OK, "{}").into_response();
-        response.headers_mut().insert(DATA_VERSION, HeaderValue::from_str(version).expect("a header value"));
+        response.headers_mut().insert(
+            DATA_VERSION,
+            HeaderValue::from_str(version).expect("a header value"),
+        );
         response
     }
 
@@ -1962,9 +1974,16 @@ mod tests {
     /// [`as_the_client_asked`].
     #[test]
     fn a_branch_read_is_answered_about_a_branch() {
-        let branch = Target::Branch { endpoint: "document".to_owned(), ns: ns() };
+        let branch = Target::Branch {
+            endpoint: "document".to_owned(),
+            ns: ns(),
+        };
         let answer = as_the_client_asked(&branch, answered_with("commit:abc123"));
-        assert_eq!(version_of(&answer), Some("branch:abc123"), "the commit stays; the resource it names is the one asked for");
+        assert_eq!(
+            version_of(&answer),
+            Some("branch:abc123"),
+            "the commit stays; the resource it names is the one asked for"
+        );
 
         // Already right — forwarded, or served from an upstream that was not
         // pinned — and left alone.
@@ -1976,7 +1995,11 @@ mod tests {
     /// what it addressed and what the upstream would have said.
     #[test]
     fn a_pinned_read_keeps_its_commit() {
-        let pinned = Target::Pinned { endpoint: "document".to_owned(), ns: ns(), commit: CommitId::new("abc123") };
+        let pinned = Target::Pinned {
+            endpoint: "document".to_owned(),
+            ns: ns(),
+            commit: CommitId::new("abc123"),
+        };
         let answer = as_the_client_asked(&pinned, answered_with("commit:abc123"));
         assert_eq!(version_of(&answer), Some("commit:abc123"));
     }
@@ -1984,7 +2007,10 @@ mod tests {
     /// A response that carries no data version gains none.
     #[test]
     fn nothing_is_invented_for_a_response_without_one() {
-        let branch = Target::Branch { endpoint: "document".to_owned(), ns: ns() };
+        let branch = Target::Branch {
+            endpoint: "document".to_owned(),
+            ns: ns(),
+        };
         let answer = as_the_client_asked(&branch, (StatusCode::OK, "{}").into_response());
         assert_eq!(version_of(&answer), None);
     }

@@ -37,7 +37,9 @@ mod tests {
                 assert!(schema.is_object());
 
                 // Check for expected top-level schema field
-                let schema_obj = schema.as_object().expect("introspection result is an object");
+                let schema_obj = schema
+                    .as_object()
+                    .expect("introspection result is an object");
                 assert!(schema_obj.contains_key("__schema"));
 
                 // Check __schema has expected fields
@@ -48,7 +50,10 @@ mod tests {
 
                 println!(
                     "Introspection successful. Found {} types.",
-                    inner_schema["types"].as_array().map(|a| a.len()).unwrap_or(0)
+                    inner_schema["types"]
+                        .as_array()
+                        .map(|a| a.len())
+                        .unwrap_or(0)
                 );
                 Ok(())
             })
@@ -110,7 +115,10 @@ mod tests {
                     .await?;
 
                 if let Some(data) = &response.data {
-                    println!("Type query response: {}", serde_json::to_string_pretty(data)?);
+                    println!(
+                        "Type query response: {}",
+                        serde_json::to_string_pretty(data)?
+                    );
                 }
                 if let Some(errors) = &response.errors {
                     for error in errors {
@@ -175,7 +183,10 @@ mod tests {
                 let obj = raw_response.as_object().expect("raw response is an object");
                 assert!(obj.contains_key("data"));
 
-                println!("Raw response: {}", serde_json::to_string_pretty(&raw_response)?);
+                println!(
+                    "Raw response: {}",
+                    serde_json::to_string_pretty(&raw_response)?
+                );
                 Ok(())
             })
             .await

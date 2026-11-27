@@ -1,5 +1,4 @@
 #![recursion_limit = "256"]
-
 // TODO: LexicalID and HashID types are not implemented yet.
 // This test file is disabled until these types are added to terminusdb_schema.
 // The types would provide specialized ID handling for different key strategies.

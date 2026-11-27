@@ -66,7 +66,10 @@ mod tests {
                         MigrationOptions::default(),
                     )
                     .await?;
-                assert!(applied.is_success(), "migration should succeed: {applied:?}");
+                assert!(
+                    applied.is_success(),
+                    "migration should succeed: {applied:?}"
+                );
 
                 // The new property exists in the schema now.
                 let schema_docs = client.get_schema_documents(&spec).await?;

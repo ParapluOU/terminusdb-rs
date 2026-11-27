@@ -62,7 +62,11 @@ mod tests {
                     }
                 }
                 names.sort();
-                assert_eq!(names, vec!["Alice", "Bob", "Carol"], "streamed all 3 bindings");
+                assert_eq!(
+                    names,
+                    vec!["Alice", "Bob", "Carol"],
+                    "streamed all 3 bindings"
+                );
                 Ok(())
             })
             .await

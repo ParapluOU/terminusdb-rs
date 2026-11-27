@@ -1,10 +1,8 @@
 #![recursion_limit = "256"]
-
 #![cfg(not(target_arch = "wasm32"))]
 
 // NOTE: These tests use debug module functionality that is not yet fully implemented.
 // They are kept as ignored tests as design documentation for future implementation.
-
 
 #[tokio::test]
 #[ignore] // Debug module not fully implemented
