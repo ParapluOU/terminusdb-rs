@@ -1831,7 +1831,10 @@ impl super::client::TerminusDBHttpClient {
             Target::to_schema().class_name()
         );
 
-        // Retrieve the raw JSON documents with headers
+        // Retrieve the raw JSON documents with headers.
+        // The typed path is implemented on top of the discouraged raw one;
+        // that is the point of deprecating it rather than removing it.
+        #[allow(deprecated)]
         let response = self
             .get_documents_with_headers(formatted_ids, spec, opts)
             .await?;

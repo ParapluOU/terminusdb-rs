@@ -1287,6 +1287,12 @@ impl super::client::TerminusDBHttpClient {
         ),
         err
     )]
+    #[deprecated(
+        note = "returns untyped `serde_json::Value` and loses the schema typing that \
+    makes this client worth using; prefer `get_instances_with_headers`, which deserializes \
+    straight into your `TerminusDBModel` and reports the same headers. If you genuinely \
+    want raw JSON, add `#[allow(deprecated)]` at the call site to say so deliberately."
+    )]
     pub async fn get_documents_with_headers(
         &self,
         ids: Vec<String>,
